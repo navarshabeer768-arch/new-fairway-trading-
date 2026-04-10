@@ -1085,6 +1085,20 @@ const LS = {
 function lsGet(key) { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } }
 function lsSet(key, data) { localStorage.setItem(key, JSON.stringify(data)); }
 
+// Helper: get all purchases from fin_purchase_orders in a normalized flat format
+// Maps each ORDER (which may have multiple lines) into a single purchase record
+function getPurchaseOrders() {
+  return lsGet('fin_purchase_orders').map(o => ({
+    id: o.id,
+    date: o.date,
+    amount: o.grand_total || o.total || 0,
+    status: o.status || 'paid',
+    description: o.product || '',
+    invoice_ref: o.invoice_ref || '',
+    supplier_id: 'alaa'
+  }));
+}
+
 // ═══════════════════════════════════════════
 // POS SYNC DATA (from Supabase)
 // ═══════════════════════════════════════════
@@ -1278,7 +1292,7 @@ function loadDashboard() {
   const finExp = lsGet(LS.transactions).filter(t => t.type === 'expense' && t.date >= from && t.date <= to).reduce((a, t) => a + t.amount, 0);
   const posExp = posData.expenses.filter(e => e.date >= from && e.date <= to).reduce((a, e) => a + (e.amount || 0), 0);
   const salaries = lsGet(LS.payroll).filter(p => p.month >= from.slice(0, 7)).reduce((a, p) => a + p.net_pay, 0);
-  const purchases = lsGet(LS.purchases).filter(p => p.date >= from && p.date <= to).reduce((a, p) => a + p.amount, 0);
+  const purchases = getPurchaseOrders().filter(p => p.date >= from && p.date <= to).reduce((a, p) => a + p.amount, 0);
   const totalExp = finExp + posExp + salaries + purchases;
   const profit = revenue - totalExp;
 
@@ -1379,8 +1393,14 @@ function loadPL() {
   const cashSales = invs.filter(i => i.payment_type === 'cash').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
   const creditSales = invs.filter(i => i.payment_type === 'credit').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
   const chequeSales = invs.filter(i => i.payment_type === 'cheque').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
-  const purchases = lsGet(LS.purchases).filter(p => p.date >= from && p.date <= to).reduce((a, p) => a + p.amount, 0);
-  const grossProfit = revenue - purchases;
+
+  // COGS = purchases from Alaa + import/extra costs
+  const purchaseOrders = getPurchaseOrders().filter(p => p.date >= from && p.date <= to);
+  const purchases = purchaseOrders.reduce((a, p) => a + p.amount, 0);
+  const importCosts = lsGet('fin_import_costs').filter(c => c.date >= from && c.date <= to).reduce((a, c) => a + c.amount, 0);
+  const totalCOGS = purchases + importCosts;
+  const grossProfit = revenue - totalCOGS;
+
   const salaries = lsGet(LS.payroll).filter(p => p.month >= from.slice(0, 7) && p.month <= to.slice(0, 7)).reduce((a, p) => a + p.net_pay, 0);
   const finExp = lsGet(LS.transactions).filter(t => t.type === 'expense' && t.date >= from && t.date <= to);
   const posExp = posData.expenses.filter(e => e.date >= from && e.date <= to);
@@ -1391,6 +1411,11 @@ function loadPL() {
   const totalOpExp = Object.values(expByCategory).reduce((a, v) => a + v, 0) + salaries;
   const netProfit = grossProfit - totalOpExp;
 
+  // Purchase breakdown rows
+  const purchaseRows = purchaseOrders.length > 0
+    ? purchaseOrders.map(p => `<tr><td style="padding:4px 8px 4px 20px;color:var(--text2);font-size:13px;">↳ ${p.invoice_ref||'Invoice'} — ${p.description||''}</td><td style="text-align:right;padding:4px 8px;font-size:13px;">${fmt(p.amount)}</td></tr>`).join('')
+    : '';
+
   document.getElementById('pl-content').innerHTML = `
     <div class="card">
       <div class="card-header">
@@ -1398,7 +1423,7 @@ function loadPL() {
         <div style="font-size:12px;color:var(--text2);">${from} to ${to}</div>
       </div>
       <div style="padding:20px;max-width:700px;margin:0 auto;">
-        <table style="font-size:14px;">
+        <table style="font-size:14px;width:100%;">
           <tr><td colspan="2" style="font-weight:800;font-size:15px;color:var(--navy);padding:10px 0;border-bottom:2px solid var(--navy);">INCOME</td></tr>
           <tr><td style="padding:8px 0;">Cash Sales</td><td style="text-align:right;">${fmt(cashSales)}</td></tr>
           <tr><td style="padding:8px 0;">Credit Sales</td><td style="text-align:right;">${fmt(creditSales)}</td></tr>
@@ -1406,8 +1431,11 @@ function loadPL() {
           <tr style="font-weight:700;background:#e8f5e9;"><td style="padding:8px;">Total Revenue</td><td style="text-align:right;padding:8px;">${fmt(revenue)}</td></tr>
           <tr><td colspan="2" style="padding-top:16px;"></td></tr>
           <tr><td colspan="2" style="font-weight:800;font-size:15px;color:var(--red);padding:10px 0;border-bottom:2px solid var(--red);">COST OF GOODS SOLD</td></tr>
-          <tr><td style="padding:8px 0;">Purchases</td><td style="text-align:right;">${fmt(purchases)}</td></tr>
-          <tr style="font-weight:700;background:#fff8f8;"><td style="padding:8px;">Gross Profit</td><td style="text-align:right;padding:8px;color:${grossProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${fmt(grossProfit)}</td></tr>
+          <tr><td style="padding:8px 0;font-weight:600;">Purchases from Alaa</td><td style="text-align:right;">${fmt(purchases)}</td></tr>
+          ${purchaseRows}
+          ${importCosts > 0 ? `<tr><td style="padding:8px 0;">Import & Extra Costs</td><td style="text-align:right;">${fmt(importCosts)}</td></tr>` : ''}
+          <tr style="font-weight:700;background:#fff8f8;"><td style="padding:8px;">Total COGS</td><td style="text-align:right;padding:8px;">${fmt(totalCOGS)}</td></tr>
+          <tr style="font-weight:700;background:#e8f5e9;"><td style="padding:8px;">Gross Profit</td><td style="text-align:right;padding:8px;color:${grossProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${fmt(grossProfit)}</td></tr>
           <tr><td colspan="2" style="padding-top:16px;"></td></tr>
           <tr><td colspan="2" style="font-weight:800;font-size:15px;color:var(--red);padding:10px 0;border-bottom:2px solid var(--red);">OPERATING EXPENSES</td></tr>
           <tr><td style="padding:8px 0;">Salaries</td><td style="text-align:right;">${fmt(salaries)}</td></tr>
@@ -1429,14 +1457,14 @@ function loadBalanceSheet() {
   const totalRevenue = invs.reduce((a, i) => a + (i.total_amount || 0), 0);
   const totalCredit = posData.customers.reduce((a, c) => a + (c.credit_balance || 0), 0);
   const cashSales = invs.filter(i => i.payment_type === 'cash' || i.payment_type === 'cheque').reduce((a, i) => a + (i.total_amount || 0), 0);
-  const totalPurchases = lsGet(LS.purchases).filter(p => p.date <= asOf).reduce((a, p) => a + p.amount, 0);
+  const totalPurchases = getPurchaseOrders().filter(p => p.date <= asOf).reduce((a, p) => a + p.amount, 0);
   const totalSalaries = lsGet(LS.payroll).reduce((a, p) => a + p.net_pay, 0);
   const totalExp = lsGet(LS.transactions).filter(t => t.type === 'expense' && t.date <= asOf).reduce((a, t) => a + t.amount, 0);
   const bankIn = lsGet(LS.bank).filter(b => b.type === 'in' && b.date <= asOf).reduce((a, b) => a + b.amount, 0);
   const bankOut = lsGet(LS.bank).filter(b => b.type === 'out' && b.date <= asOf).reduce((a, b) => a + b.amount, 0);
   const cashBalance = cashSales + bankIn - bankOut - totalPurchases - totalSalaries - totalExp;
   const totalAssets = cashBalance + totalCredit;
-  const totalLiabilities = lsGet(LS.purchases).filter(p => p.status === 'pending').reduce((a, p) => a + p.amount, 0);
+  const totalLiabilities = getPurchaseOrders().filter(p => p.status === 'pending').reduce((a, p) => a + p.amount, 0);
   const equity = totalAssets - totalLiabilities;
 
   const assets = lsGet('fin_assets').filter(a => a.status === 'active');
@@ -2647,9 +2675,7 @@ function switchLiabTab(tab) {
 }
 
 function loadPayables() {
-  const purchases = lsGet(LS.purchases).filter(p => p.status === 'pending' || p.status === 'partial');
-  const suppliers = lsGet(LS.suppliers);
-  const supMap = {}; suppliers.forEach(s => supMap[s.id] = s.name);
+  const purchases = getPurchaseOrders().filter(p => p.status === 'pending' || p.status === 'partial');
   const totalPayables = purchases.reduce((a, p) => a + p.amount, 0);
   const drawings = lsGet('fin_drawings');
   const totalDrawings = drawings.reduce((a, d) => a + d.amount, 0);
@@ -2659,12 +2685,12 @@ function loadPayables() {
   document.getElementById('payables-list').innerHTML = purchases.map(p => `
     <tr>
       <td>${p.date}</td>
-      <td>${supMap[p.supplier_id] || 'Unknown'}</td>
-      <td>${p.description}</td>
+      <td>Alaa Trading — Oman</td>
+      <td>${p.description || p.invoice_ref || '—'}</td>
       <td style="font-weight:700;color:var(--red);">${fmt(p.amount)}</td>
-      <td>${p.due_date || '—'}</td>
+      <td>—</td>
       <td><span class="badge badge-${p.status === 'pending' ? 'red' : 'gold'}">${p.status}</span></td>
-      <td><button class="btn btn-success btn-sm" onclick="markPurchasePaid('${p.id}')">✅ Paid</button></td>
+      <td><button class="btn btn-success btn-sm" onclick="markPOPaid('${p.id}')">✅ Paid</button></td>
     </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;color:#999;">No pending payables</td></tr>';
 }
 
