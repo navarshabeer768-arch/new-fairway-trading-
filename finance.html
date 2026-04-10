@@ -424,6 +424,7 @@ tr:hover td{background:#f8f9ff;}
           <div class="tab active" onclick="switchProductTab('list')">📦 All Products</div>
           <div class="tab" onclick="switchProductTab('stock')">🏭 Warehouse Stock</div>
         </div>
+        <button class="btn btn-outline btn-sm" onclick="cleanDuplicateProducts()" style="color:var(--red);" title="Remove duplicate products from Finance">🧹 Clean Duplicates</button>
         <button class="btn btn-primary btn-sm" onclick="openAddProductModal()">+ Add Product</button>
       </div>
       <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);">
@@ -1116,45 +1117,37 @@ async function syncData() {
       warehouse_qty: whMap[p.product_id] || 0,
       truck_qty: trMap[p.product_id] || 0
     }));
-    // Sync POS products into fin_products (merge, don't overwrite manual ones)
-    const finProds = lsGet('fin_products');
-    // Fix any fin_products with broken pos_id (Date.now() values > max int or 'fin-' prefixed)
-    let finProdsFixed = false;
-    const posProductByName = {};
-    posData.products.forEach(p => { posProductByName[p.name.toLowerCase().trim()] = p; });
-    finProds.forEach((fp, i) => {
-      const posIdNum = parseInt(fp.pos_id);
-      const isBroken = !fp.pos_id || posIdNum > 2147483647 || String(fp.pos_id).startsWith('fin-');
-      if (isBroken) {
-        // Try to match by name
-        const match = posProductByName[fp.name.toLowerCase().trim()];
-        if (match) {
-          finProds[i].pos_id = match.product_id;
-          finProds[i].id = 'pos-' + match.product_id;
-          finProdsFixed = true;
-        }
-      }
+    // ── Rebuild fin_products cleanly from POS — no duplicates ever ──
+    // Strategy: POS Supabase is the source of truth for product_id.
+    // We keep fin_products as a 1-to-1 map keyed by pos_id (product_id from Supabase).
+    const oldFinProds = lsGet('fin_products');
+    // Build lookup of existing fin customisations by pos_id AND by name (for broken records)
+    const finCustomByPosId = {};
+    const finCustomByName = {};
+    oldFinProds.forEach(fp => {
+      const pid = parseInt(fp.pos_id);
+      const validPosId = pid && pid <= 2147483647;
+      if (validPosId) finCustomByPosId[pid] = fp;
+      else finCustomByName[fp.name.toLowerCase().trim()] = fp;
     });
-    if (finProdsFixed) lsSet('fin_products', finProds);
-    const finPosIds = new Set(finProds.map(p => p.pos_id).filter(Boolean));
-    const newFromPOS = posData.products
-      .filter(p => !finPosIds.has(p.product_id))
-      .map(p => ({
+    // Rebuild from POS products — one entry per product, no duplicates
+    const rebuiltFinProds = posData.products.map(p => {
+      const existing = finCustomByPosId[p.product_id] || finCustomByName[p.name.toLowerCase().trim()] || {};
+      return {
         id: 'pos-' + p.product_id,
         pos_id: p.product_id,
         name: p.name,
-        category: p.category || '',
-        sell_price: p.selling_price || 0,
-        cost_price: p.cost_price || 0,
-        cases_per_box: p.cases_per_box || 4,
-        unit: p.unit || '',
-        barcode: p.barcode || '',
-        icon: p.icon || '📦',
-        notes: ''
-      }));
-    if (newFromPOS.length > 0) {
-      lsSet('fin_products', [...lsGet('fin_products'), ...newFromPOS]);
-    }
+        category: existing.category || p.category || '',
+        sell_price: existing.sell_price || p.selling_price || 0,
+        cost_price: existing.cost_price || p.cost_price || 0,
+        cases_per_box: existing.cases_per_box || p.cases_per_box || 4,
+        unit: existing.unit || p.unit || '',
+        barcode: existing.barcode || p.barcode || '',
+        icon: existing.icon || p.icon || '📦',
+        notes: existing.notes || ''
+      };
+    });
+    lsSet('fin_products', rebuiltFinProds);
     document.getElementById('sync-status').textContent = '✅ Synced: ' + new Date().toLocaleTimeString();
     // Always reload the active page after sync so data appears
     const activePage = document.querySelector('.page.active');
@@ -1885,6 +1878,16 @@ async function saveProduct() {
 
   } else {
     // ── NEW product ──
+    const name = document.getElementById('prod-name').value.trim();
+    // Check duplicate name in Supabase first
+    try {
+      const { data: existing } = await sb.from('products').select('product_id, name').ilike('name', name);
+      if (existing && existing.length > 0) {
+        alert('⚠️ A product named "' + name + '" already exists in POS (ID: ' + existing[0].product_id + ').\n\nClick "🔄 Sync from POS" to import it to Finance instead of creating a duplicate.');
+        return;
+      }
+    } catch(e) { console.warn('Duplicate check failed:', e.message); }
+
     const p = {
       id: 'fin-' + Date.now().toString(),
       pos_id: null,
@@ -1898,9 +1901,7 @@ async function saveProduct() {
       notes: document.getElementById('prod-notes').value || '',
       icon: '📦'
     };
-    all.unshift(p);
-    lsSet('fin_products', all);
-    // Insert into POS Supabase
+    // Insert into POS Supabase first to get real product_id
     try {
       const { data, error } = await sb.from('products').insert({
         name: p.name,
@@ -1916,13 +1917,8 @@ async function saveProduct() {
       }).select().single();
       if (error) throw error;
       if (data && data.product_id) {
-        // Save real POS product_id back to fin_products
-        const updatedAll = lsGet('fin_products');
-        const idx2 = updatedAll.findIndex(x => x.id === p.id);
-        if (idx2 >= 0) {
-          updatedAll[idx2].pos_id = data.product_id;
-          lsSet('fin_products', updatedAll);
-        }
+        p.pos_id = data.product_id;
+        p.id = 'pos-' + data.product_id;
         // Create warehouse & inventory rows
         await sb.from('warehouse_stock').insert({ product_id: data.product_id, quantity: 0, last_updated: new Date().toISOString() });
         await sb.from('inventory').insert({ product_id: data.product_id, quantity: 0, last_updated: new Date().toISOString() });
@@ -1930,7 +1926,14 @@ async function saveProduct() {
       }
     } catch(e) {
       console.error('POS insert error:', e);
-      showToast('⚠️ Saved in Finance but POS sync failed: ' + e.message);
+      showToast('⚠️ POS sync failed: ' + e.message);
+    }
+    // Add to fin_products (with real pos_id if sync worked)
+    const allNow = lsGet('fin_products');
+    // Final duplicate check by name
+    if (!allNow.find(x => x.name.toLowerCase().trim() === p.name.toLowerCase().trim())) {
+      allNow.unshift(p);
+      lsSet('fin_products', allNow);
     }
   }
   closeModal('modal-product');
@@ -1943,9 +1946,30 @@ function deleteProduct(id) {
   loadProducts();
 }
 
-// ═══════════════════════════════════════════
-// PURCHASES FROM ALAA
-// ═══════════════════════════════════════════
+function cleanDuplicateProducts() {
+  const all = lsGet('fin_products');
+  const seen = new Set();
+  const seenNames = new Set();
+  const clean = [];
+  all.forEach(p => {
+    // Deduplicate by pos_id first, then by name
+    const key = p.pos_id ? ('id:' + p.pos_id) : ('name:' + p.name.toLowerCase().trim());
+    if (!seen.has(key)) {
+      seen.add(key);
+      clean.push(p);
+    }
+  });
+  const removed = all.length - clean.length;
+  lsSet('fin_products', clean);
+  loadProducts();
+  if (removed > 0) {
+    showToast('🧹 Removed ' + removed + ' duplicate product(s)!');
+  } else {
+    showToast('✅ No duplicates found.');
+  }
+}
+
+
 let currentPurchaseTab = 'list';
 function switchPurchaseTab(tab) {
   currentPurchaseTab = tab;
