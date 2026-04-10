@@ -1394,12 +1394,41 @@ function loadPL() {
   const creditSales = invs.filter(i => i.payment_type === 'credit').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
   const chequeSales = invs.filter(i => i.payment_type === 'cheque').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
 
-  // COGS = purchases from Alaa + import/extra costs
-  const purchaseOrders = getPurchaseOrders().filter(p => p.date >= from && p.date <= to);
-  const purchases = purchaseOrders.reduce((a, p) => a + p.amount, 0);
+  // ── COGS = cost of items actually SOLD in the period ──
+  // invoice_items.quantity = bags sold, products.cost_price = cost per box
+  const invIds = new Set(invs.map(i => i.invoice_id));
+  const prodMap = {};
+  posData.products.forEach(p => { prodMap[p.product_id] = p; });
+  const finProds = lsGet('fin_products');
+  const finProdMap = {};
+  finProds.forEach(p => { if (p.pos_id) finProdMap[p.pos_id] = p; });
+
+  // Build COGS by product
+  const cogsByProduct = {};
+  posData.invoice_items
+    .filter(it => invIds.has(it.invoice_id))
+    .forEach(it => {
+      const pid = it.product_id;
+      const prod = prodMap[pid] || {};
+      const finProd = finProdMap[pid] || {};
+      const cpb = parseInt(prod.cases_per_box || finProd.cases_per_box || 4);
+      // cost_price in products = cost per BOX. item quantity = bags sold.
+      const costPerBag = (parseFloat(prod.cost_price || finProd.cost_price || 0)) / cpb;
+      const bagsSold = parseFloat(it.quantity || 0);
+      const itemCost = costPerBag * bagsSold;
+      const name = prod.name || finProd.name || 'Product #' + pid;
+      if (!cogsByProduct[pid]) cogsByProduct[pid] = { name, cost: 0, bags: 0 };
+      cogsByProduct[pid].cost += itemCost;
+      cogsByProduct[pid].bags += bagsSold;
+    });
+
+  const totalCOGS = Object.values(cogsByProduct).reduce((a, v) => a + v.cost, 0);
   const importCosts = lsGet('fin_import_costs').filter(c => c.date >= from && c.date <= to).reduce((a, c) => a + c.amount, 0);
-  const totalCOGS = purchases + importCosts;
-  const grossProfit = revenue - totalCOGS;
+  const totalCOGSWithImport = totalCOGS + importCosts;
+  const grossProfit = revenue - totalCOGSWithImport;
+
+  // Also show total purchases in period as reference (not as expense)
+  const totalPurchased = getPurchaseOrders().filter(p => p.date >= from && p.date <= to).reduce((a, p) => a + p.amount, 0);
 
   const salaries = lsGet(LS.payroll).filter(p => p.month >= from.slice(0, 7) && p.month <= to.slice(0, 7)).reduce((a, p) => a + p.net_pay, 0);
   const finExp = lsGet(LS.transactions).filter(t => t.type === 'expense' && t.date >= from && t.date <= to);
@@ -1411,10 +1440,14 @@ function loadPL() {
   const totalOpExp = Object.values(expByCategory).reduce((a, v) => a + v, 0) + salaries;
   const netProfit = grossProfit - totalOpExp;
 
-  // Purchase breakdown rows
-  const purchaseRows = purchaseOrders.length > 0
-    ? purchaseOrders.map(p => `<tr><td style="padding:4px 8px 4px 20px;color:var(--text2);font-size:13px;">↳ ${p.invoice_ref||'Invoice'} — ${p.description||''}</td><td style="text-align:right;padding:4px 8px;font-size:13px;">${fmt(p.amount)}</td></tr>`).join('')
-    : '';
+  // COGS breakdown rows by product
+  const cogsRows = Object.values(cogsByProduct).length > 0
+    ? Object.values(cogsByProduct).map(v => {
+        const cpbRef = 4;
+        const boxes = (v.bags / cpbRef).toFixed(1);
+        return `<tr><td style="padding:4px 8px 4px 20px;color:var(--text2);font-size:13px;">↳ ${v.name} (${v.bags} bags sold)</td><td style="text-align:right;padding:4px 8px;font-size:13px;">${fmt(v.cost)}</td></tr>`;
+      }).join('')
+    : '<tr><td colspan="2" style="padding:4px 8px 4px 20px;color:#999;font-size:12px;">No sales in this period</td></tr>';
 
   document.getElementById('pl-content').innerHTML = `
     <div class="card">
@@ -1431,10 +1464,10 @@ function loadPL() {
           <tr style="font-weight:700;background:#e8f5e9;"><td style="padding:8px;">Total Revenue</td><td style="text-align:right;padding:8px;">${fmt(revenue)}</td></tr>
           <tr><td colspan="2" style="padding-top:16px;"></td></tr>
           <tr><td colspan="2" style="font-weight:800;font-size:15px;color:var(--red);padding:10px 0;border-bottom:2px solid var(--red);">COST OF GOODS SOLD</td></tr>
-          <tr><td style="padding:8px 0;font-weight:600;">Purchases from Alaa</td><td style="text-align:right;">${fmt(purchases)}</td></tr>
-          ${purchaseRows}
+          <tr><td style="padding:8px 0;font-weight:600;">Cost of Products Sold</td><td style="text-align:right;">${fmt(totalCOGS)}</td></tr>
+          ${cogsRows}
           ${importCosts > 0 ? `<tr><td style="padding:8px 0;">Import & Extra Costs</td><td style="text-align:right;">${fmt(importCosts)}</td></tr>` : ''}
-          <tr style="font-weight:700;background:#fff8f8;"><td style="padding:8px;">Total COGS</td><td style="text-align:right;padding:8px;">${fmt(totalCOGS)}</td></tr>
+          <tr style="font-weight:700;background:#fff8f8;"><td style="padding:8px;">Total COGS</td><td style="text-align:right;padding:8px;">${fmt(totalCOGSWithImport)}</td></tr>
           <tr style="font-weight:700;background:#e8f5e9;"><td style="padding:8px;">Gross Profit</td><td style="text-align:right;padding:8px;color:${grossProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${fmt(grossProfit)}</td></tr>
           <tr><td colspan="2" style="padding-top:16px;"></td></tr>
           <tr><td colspan="2" style="font-weight:800;font-size:15px;color:var(--red);padding:10px 0;border-bottom:2px solid var(--red);">OPERATING EXPENSES</td></tr>
@@ -1443,6 +1476,9 @@ function loadPL() {
           <tr style="font-weight:700;background:#fff8f8;"><td style="padding:8px;">Total Operating Expenses</td><td style="text-align:right;padding:8px;">${fmt(totalOpExp)}</td></tr>
           <tr><td colspan="2" style="padding:8px 0;border-top:2px solid var(--navy);"></td></tr>
           <tr style="font-weight:900;font-size:16px;background:${netProfit >= 0 ? '#e8f5e9' : '#ffebee'};"><td style="padding:12px;">NET PROFIT / LOSS</td><td style="text-align:right;padding:12px;color:${netProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${fmt(netProfit)}</td></tr>
+          <tr><td colspan="2" style="padding-top:16px;border-top:1px dashed var(--border);"></td></tr>
+          <tr><td style="padding:6px 0;color:var(--text2);font-size:12px;">📦 Total Purchased (period)</td><td style="text-align:right;color:var(--text2);font-size:12px;">${fmt(totalPurchased)}</td></tr>
+          <tr><td style="padding:6px 0;color:var(--text2);font-size:12px;">📊 Unsold Stock Cost (in warehouse/truck)</td><td style="text-align:right;color:var(--text2);font-size:12px;">${fmt(totalPurchased - totalCOGS)}</td></tr>
         </table>
       </div>
     </div>`;
