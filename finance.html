@@ -2304,11 +2304,18 @@ function cleanDuplicatePurchases() {
 
 // Repair old broken purchases (reapply warehouse stock using correct pos_id from fin_products)
 async function repairOldPurchases() {
-  if (!confirm('⚠️ This will RECALCULATE warehouse stock from scratch based on your purchase records.\n\nIt will SET the correct stock (not add on top).\n\nMinus any stock already sold/used will NOT be accounted for here.\n\nContinue?')) return;
+  if (!confirm('⚠️ This will RECALCULATE warehouse stock from scratch based on your purchase records.\n\nIt will SET the correct stock (not add on top).\n\nContinue?')) return;
 
   const finProds = lsGet('fin_products');
+  // Build maps: pos_id by name, and cpb by pos_id
   const posIdByName = {};
-  finProds.forEach(p => { if (p.pos_id && parseInt(p.pos_id) <= 2147483647) posIdByName[p.name.toLowerCase().trim()] = p.pos_id; });
+  const cpbByPosId = {};
+  finProds.forEach(p => {
+    if (p.pos_id && parseInt(p.pos_id) <= 2147483647) {
+      posIdByName[p.name.toLowerCase().trim()] = p.pos_id;
+      cpbByPosId[p.pos_id] = parseInt(p.cases_per_box) || 4;
+    }
+  });
 
   // First deduplicate purchases
   const allOrders = lsGet('fin_purchase_orders');
@@ -2324,19 +2331,33 @@ async function repairOldPurchases() {
   });
   lsSet('fin_purchase_orders', deduped);
 
-  // Tally total bags purchased per product_id
+  // Tally total BAGS purchased per product — ALWAYS recalculate from qty × cpb
+  // Never trust stored totalCases (may be inflated from old bugs)
   const totalBagsByProduct = {};
   for (const o of deduped) {
-    const lines = o.lines || [{ productName: o.product, qty: o.qty, totalCases: o.total_cases||o.qty, posProductId: o.pos_product_id }];
+    const lines = o.lines || [{ productName: o.product, qty: o.qty, posProductId: o.pos_product_id }];
     for (const line of lines) {
       let pid = parseInt(line.posProductId);
       if (!pid || pid > 2147483647) pid = posIdByName[(line.productName||'').toLowerCase().trim()];
       if (!pid || pid > 2147483647) continue;
-      totalBagsByProduct[pid] = (totalBagsByProduct[pid] || 0) + (line.totalCases || line.qty || 0);
+      const cpb = cpbByPosId[pid] || 4;
+      const boxes = parseFloat(line.qty) || 0;
+      const bags = boxes * cpb; // Always recalculate — never trust stored totalCases
+      totalBagsByProduct[pid] = (totalBagsByProduct[pid] || 0) + bags;
     }
   }
 
-  // SET warehouse_stock to calculated totals (overwrite, not add)
+  // Show what we calculated before saving
+  const preview = Object.entries(totalBagsByProduct).map(([pid, bags]) => {
+    const prod = finProds.find(p => p.pos_id == pid);
+    const cpb = cpbByPosId[pid] || 4;
+    const boxes = Math.floor(bags / cpb);
+    return (prod ? prod.name : 'Product #'+pid) + ': ' + boxes + ' boxes (' + bags + ' bags)';
+  }).join('\n');
+
+  if (!confirm('Ready to set these values in warehouse:\n\n' + preview + '\n\nProceed?')) return;
+
+  // SET warehouse_stock — overwrite with correct values
   let fixed = 0, errors = [];
   for (const [pidStr, bags] of Object.entries(totalBagsByProduct)) {
     const pid = parseInt(pidStr);
@@ -2347,7 +2368,6 @@ async function repairOldPurchases() {
       } else {
         await sb.from('warehouse_stock').insert({ product_id: pid, quantity: bags, last_updated: new Date().toISOString() });
       }
-      // Also fix products.stock_quantity
       await sb.from('products').update({ stock_quantity: bags }).eq('product_id', pid);
       fixed++;
     } catch(e) { errors.push('Product ' + pid + ': ' + e.message); }
@@ -2355,7 +2375,7 @@ async function repairOldPurchases() {
 
   await syncData();
   if (errors.length) alert('Done! ' + fixed + ' products fixed.\n\nErrors:\n' + errors.join('\n'));
-  else showToast('✅ Warehouse recalculated! ' + fixed + ' product(s) updated correctly.');
+  else showToast('✅ Warehouse recalculated! ' + fixed + ' product(s) set correctly.');
 }
 
 
