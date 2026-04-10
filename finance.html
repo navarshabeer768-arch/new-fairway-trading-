@@ -1949,13 +1949,16 @@ async function savePurchaseOrder() {
   const opt = sel.options[sel.selectedIndex];
   const productName = opt?.text || '';
   const cpb = parseInt(opt?.dataset.casesPerBox) || 1;
-  const posProductId = opt?.dataset.posId || productId;
+  // Strip any "pos-" prefix and parse as integer for Supabase FK
+  const rawPosId = opt?.dataset.posId || productId;
+  const posProductId = parseInt(String(rawPosId).replace('pos-', '')) || null;
   const qty = parseFloat(document.getElementById('po-qty').value) || 0;
   const totalCases = qty * cpb;
   const unitPrice = parseFloat(document.getElementById('po-unit-price').value) || 0;
   const total = parseFloat(document.getElementById('po-total').value) || qty * unitPrice;
   if (!productId) { alert('Please select a product'); return; }
   if (!qty || !total) { alert('Enter quantity and price'); return; }
+  if (!posProductId || isNaN(posProductId)) { alert('Could not link product to POS. Please sync first.'); return; }
   const o = {
     id: Date.now().toString(),
     date: document.getElementById('po-date').value,
@@ -1968,22 +1971,31 @@ async function savePurchaseOrder() {
     status: document.getElementById('po-status').value,
     notes: document.getElementById('po-notes').value
   };
-  // Save to finance
+  // Save to finance localStorage
   const all = lsGet('fin_purchase_orders'); all.unshift(o); lsSet('fin_purchase_orders', all);
-  // ✅ Update POS warehouse stock via Supabase — add CASES not boxes
+  // ✅ Update POS warehouse_stock via Supabase
   try {
-    const pid = parseInt(posProductId);
-    const { data: existing } = await sb.from('warehouse_stock').select('*').eq('product_id', pid);
+    const { data: existing, error: fetchErr } = await sb.from('warehouse_stock').select('*').eq('product_id', posProductId);
+    if (fetchErr) throw new Error('Fetch error: ' + fetchErr.message);
     if (existing && existing.length > 0) {
-      const newQty = (existing[0].quantity || 0) + totalCases;
-      await sb.from('warehouse_stock').update({ quantity: newQty, last_updated: new Date().toISOString() }).eq('product_id', pid);
+      const newQty = (parseFloat(existing[0].quantity) || 0) + totalCases;
+      const { error: updErr } = await sb.from('warehouse_stock').update({ quantity: newQty, last_updated: new Date().toISOString() }).eq('product_id', posProductId);
+      if (updErr) throw new Error('Update error: ' + updErr.message);
     } else {
-      await sb.from('warehouse_stock').insert({ product_id: pid, quantity: totalCases, last_updated: new Date().toISOString() });
+      const { error: insErr } = await sb.from('warehouse_stock').insert({ product_id: posProductId, quantity: totalCases, last_updated: new Date().toISOString() });
+      if (insErr) throw new Error('Insert error: ' + insErr.message);
+    }
+    // Also update products.stock_quantity so POS shows correct warehouse stock
+    const { data: prodRow } = await sb.from('products').select('stock_quantity').eq('product_id', posProductId).single();
+    if (prodRow) {
+      const newStock = (parseFloat(prodRow.stock_quantity) || 0) + totalCases;
+      await sb.from('products').update({ stock_quantity: newStock }).eq('product_id', posProductId);
     }
     showToast(`✅ Purchase saved! +${qty} boxes = +${totalCases} bags added to warehouse`);
   } catch(e) {
     console.error('Warehouse sync error:', e);
     showToast('⚠️ Purchase saved but warehouse sync failed: ' + e.message);
+    alert('Warehouse sync error: ' + e.message + '\n\nMake sure you clicked "Sync from POS" first so products are linked.');
   }
   closeModal('modal-purchase-order');
   loadPurchaseOrders();
