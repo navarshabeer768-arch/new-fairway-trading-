@@ -1971,7 +1971,15 @@ async function loadPOSScreen() {
 
 function renderPOSProducts(products) {
   const grid = document.getElementById('pos-products');
-  if (!products.length) { grid.innerHTML = '<div class="empty-state"><div>🔍</div><div>No products found</div></div>'; return; }
+  if (!products.length) {
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;padding:32px 16px;text-align:center;">
+      <div style="font-size:2.5rem;">📦</div>
+      <div style="font-weight:700;margin:8px 0 4px;">No products yet</div>
+      <div style="font-size:.8rem;color:var(--text2);margin-bottom:16px;">Add products first via the Products screen, or add a purchase in Finance app then sync.</div>
+      <button class="btn btn-primary btn-sm" onclick="showScreen('products-screen')">➕ Add Products</button>
+    </div>`;
+    return;
+  }
   grid.innerHTML = products.map(p => {
     const stock = p.truckQty || 0;
     const cpb = getCasesPerBox(p);
