@@ -1395,29 +1395,33 @@ function loadPL() {
   const chequeSales = invs.filter(i => i.payment_type === 'cheque').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
 
   // ── COGS = cost of items actually SOLD in the period ──
-  // invoice_items.quantity = bags sold, products.cost_price = cost per box
+  // invoice_items.cost = cost per bag (saved by POS at time of sale)
+  // invoice_items.quantity = bags sold
+  // Fallback: products.cost_price / cases_per_box if cost column is 0
   const invIds = new Set(invs.map(i => i.invoice_id));
   const prodMap = {};
   posData.products.forEach(p => { prodMap[p.product_id] = p; });
   const finProds = lsGet('fin_products');
   const finProdMap = {};
-  finProds.forEach(p => { if (p.pos_id) finProdMap[p.pos_id] = p; });
+  finProds.forEach(p => { if (p.pos_id) finProdMap[parseInt(p.pos_id)] = p; });
 
-  // Build COGS by product
   const cogsByProduct = {};
   posData.invoice_items
-    .filter(it => invIds.has(it.invoice_id))
+    .filter(it => invIds.has(it.invoice_id) || invIds.has(String(it.invoice_id)))
     .forEach(it => {
-      const pid = it.product_id;
+      const pid = parseInt(it.product_id);
       const prod = prodMap[pid] || {};
       const finProd = finProdMap[pid] || {};
       const cpb = parseInt(prod.cases_per_box || finProd.cases_per_box || 4);
-      // cost_price in products = cost per BOX. item quantity = bags sold.
-      const costPerBag = (parseFloat(prod.cost_price || finProd.cost_price || 0)) / cpb;
+      const costPerBox = parseFloat(prod.cost_price || finProd.cost_price || 0);
+      const costPerBag = costPerBox / cpb;
+      // Use stored cost per bag if available and > 0, else calculate
+      const storedCostPerBag = parseFloat(it.cost || 0);
+      const effectiveCostPerBag = storedCostPerBag > 0 ? storedCostPerBag : costPerBag;
       const bagsSold = parseFloat(it.quantity || 0);
-      const itemCost = costPerBag * bagsSold;
+      const itemCost = effectiveCostPerBag * bagsSold;
       const name = prod.name || finProd.name || 'Product #' + pid;
-      if (!cogsByProduct[pid]) cogsByProduct[pid] = { name, cost: 0, bags: 0 };
+      if (!cogsByProduct[pid]) cogsByProduct[pid] = { name, cost: 0, bags: 0, cpb };
       cogsByProduct[pid].cost += itemCost;
       cogsByProduct[pid].bags += bagsSold;
     });
@@ -1443,11 +1447,11 @@ function loadPL() {
   // COGS breakdown rows by product
   const cogsRows = Object.values(cogsByProduct).length > 0
     ? Object.values(cogsByProduct).map(v => {
-        const cpbRef = 4;
-        const boxes = (v.bags / cpbRef).toFixed(1);
-        return `<tr><td style="padding:4px 8px 4px 20px;color:var(--text2);font-size:13px;">↳ ${v.name} (${v.bags} bags sold)</td><td style="text-align:right;padding:4px 8px;font-size:13px;">${fmt(v.cost)}</td></tr>`;
+        const cpb = v.cpb || 4;
+        const boxes = (v.bags / cpb).toFixed(1);
+        return `<tr><td style="padding:4px 8px 4px 20px;color:var(--text2);font-size:13px;">↳ ${v.name} (${boxes} boxes / ${v.bags} bags)</td><td style="text-align:right;padding:4px 8px;font-size:13px;">${fmt(v.cost)}</td></tr>`;
       }).join('')
-    : '<tr><td colspan="2" style="padding:4px 8px 4px 20px;color:#999;font-size:12px;">No sales in this period</td></tr>';
+    : '<tr><td colspan="2" style="padding:4px 8px 4px 20px;color:#999;font-size:12px;">No sales recorded in this period — make sure to Sync from POS</td></tr>';
 
   document.getElementById('pl-content').innerHTML = `
     <div class="card">
