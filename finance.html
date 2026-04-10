@@ -1415,7 +1415,6 @@ function loadPL() {
       const cpb = parseInt(prod.cases_per_box || finProd.cases_per_box || 4);
       const costPerBox = parseFloat(prod.cost_price || finProd.cost_price || 0);
       const costPerBag = costPerBox / cpb;
-      // Use stored cost per bag if available and > 0, else calculate
       const storedCostPerBag = parseFloat(it.cost || 0);
       const effectiveCostPerBag = storedCostPerBag > 0 ? storedCostPerBag : costPerBag;
       const bagsSold = parseFloat(it.quantity || 0);
@@ -1425,6 +1424,9 @@ function loadPL() {
       cogsByProduct[pid].cost += itemCost;
       cogsByProduct[pid].bags += bagsSold;
     });
+
+  // Debug info
+  const debugInfo = `invoices in period: ${invs.length} | invoice_items total: ${posData.invoice_items.length} | items matched: ${posData.invoice_items.filter(it => invIds.has(it.invoice_id) || invIds.has(String(it.invoice_id))).length} | products loaded: ${posData.products.length}`;
 
   const totalCOGS = Object.values(cogsByProduct).reduce((a, v) => a + v.cost, 0);
   const importCosts = lsGet('fin_import_costs').filter(c => c.date >= from && c.date <= to).reduce((a, c) => a + c.amount, 0);
@@ -1468,6 +1470,7 @@ function loadPL() {
           <tr style="font-weight:700;background:#e8f5e9;"><td style="padding:8px;">Total Revenue</td><td style="text-align:right;padding:8px;">${fmt(revenue)}</td></tr>
           <tr><td colspan="2" style="padding-top:16px;"></td></tr>
           <tr><td colspan="2" style="font-weight:800;font-size:15px;color:var(--red);padding:10px 0;border-bottom:2px solid var(--red);">COST OF GOODS SOLD</td></tr>
+          <tr><td colspan="2" style="font-size:11px;color:#888;padding:4px 0;">🔍 Debug: ${debugInfo}</td></tr>
           <tr><td style="padding:8px 0;font-weight:600;">Cost of Products Sold</td><td style="text-align:right;">${fmt(totalCOGS)}</td></tr>
           ${cogsRows}
           ${importCosts > 0 ? `<tr><td style="padding:8px 0;">Import & Extra Costs</td><td style="text-align:right;">${fmt(importCosts)}</td></tr>` : ''}
