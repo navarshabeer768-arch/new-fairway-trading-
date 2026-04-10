@@ -452,6 +452,7 @@ tr:hover td{background:#f8f9ff;}
           <div class="tab active" onclick="switchPurchaseTab('list')">📦 Purchase Orders</div>
           <div class="tab" onclick="switchPurchaseTab('summary')">📊 Summary</div>
         </div>
+        <button class="btn btn-outline btn-sm" onclick="repairOldPurchases()" title="Re-apply all old purchases to warehouse stock" style="color:var(--gold);">🔧 Repair Warehouse</button>
         <button class="btn btn-primary btn-sm" onclick="openAddPurchaseOrderModal()">+ New Purchase</button>
       </div>
       <div class="stat-grid">
@@ -1117,6 +1118,24 @@ async function syncData() {
     }));
     // Sync POS products into fin_products (merge, don't overwrite manual ones)
     const finProds = lsGet('fin_products');
+    // Fix any fin_products with broken pos_id (Date.now() values > max int or 'fin-' prefixed)
+    let finProdsFixed = false;
+    const posProductByName = {};
+    posData.products.forEach(p => { posProductByName[p.name.toLowerCase().trim()] = p; });
+    finProds.forEach((fp, i) => {
+      const posIdNum = parseInt(fp.pos_id);
+      const isBroken = !fp.pos_id || posIdNum > 2147483647 || String(fp.pos_id).startsWith('fin-');
+      if (isBroken) {
+        // Try to match by name
+        const match = posProductByName[fp.name.toLowerCase().trim()];
+        if (match) {
+          finProds[i].pos_id = match.product_id;
+          finProds[i].id = 'pos-' + match.product_id;
+          finProdsFixed = true;
+        }
+      }
+    });
+    if (finProdsFixed) lsSet('fin_products', finProds);
     const finPosIds = new Set(finProds.map(p => p.pos_id).filter(Boolean));
     const newFromPOS = posData.products
       .filter(p => !finPosIds.has(p.product_id))
@@ -1134,7 +1153,7 @@ async function syncData() {
         notes: ''
       }));
     if (newFromPOS.length > 0) {
-      lsSet('fin_products', [...finProds, ...newFromPOS]);
+      lsSet('fin_products', [...lsGet('fin_products'), ...newFromPOS]);
     }
     document.getElementById('sync-status').textContent = '✅ Synced: ' + new Date().toLocaleTimeString();
     // Always reload the active page after sync so data appears
@@ -1821,70 +1840,99 @@ function editProduct(id) {
 
 async function saveProduct() {
   const editId = document.getElementById('prod-modal-title').dataset.editId;
-  const p = {
-    id: editId || Date.now().toString(),
-    name: document.getElementById('prod-name').value.trim(),
-    category: document.getElementById('prod-category').value,
-    sell_price: parseFloat(document.getElementById('prod-sell-price').value)||0,
-    cost_price: parseFloat(document.getElementById('prod-cost-price').value)||0,
-    unit: document.getElementById('prod-unit').value,
-    cases_per_box: parseInt(document.getElementById('prod-cases-per-box').value) || 1,
-    barcode: document.getElementById('prod-barcode').value,
-    notes: document.getElementById('prod-notes').value,
-    icon: '📦'
-  };
-  if (!p.name) { alert('Enter product name'); return; }
+  const name = document.getElementById('prod-name').value.trim();
+  if (!name) { alert('Enter product name'); return; }
   const all = lsGet('fin_products');
+
   if (editId) {
-    // Update in Finance
+    // ── EDIT existing product ──
     const idx = all.findIndex(x => x.id === editId);
-    if (idx >= 0) all[idx] = p;
-    // Update in POS Supabase if pos_id exists
-    if (p.pos_id) {
+    if (idx < 0) { alert('Product not found'); return; }
+    const existing = all[idx];
+    // Merge new values into existing — preserve pos_id and id
+    all[idx] = Object.assign({}, existing, {
+      name,
+      category: document.getElementById('prod-category').value,
+      sell_price: parseFloat(document.getElementById('prod-sell-price').value) || existing.sell_price || 0,
+      cost_price: parseFloat(document.getElementById('prod-cost-price').value) || existing.cost_price || 0,
+      unit: document.getElementById('prod-unit').value || existing.unit || '',
+      cases_per_box: parseInt(document.getElementById('prod-cases-per-box').value) || existing.cases_per_box || 1,
+      barcode: document.getElementById('prod-barcode').value || existing.barcode || '',
+      notes: document.getElementById('prod-notes').value || existing.notes || '',
+    });
+    const updated = all[idx];
+    lsSet('fin_products', all);
+    // Also update in POS Supabase if linked
+    if (updated.pos_id) {
       try {
-        await sb.from('products').update({
-          name: p.name, category: p.category,
-          selling_price: p.sell_price, cost_price: p.cost_price,
-          unit: p.unit, icon: '📦'
-        }).eq('product_id', p.pos_id);
+        const { error } = await sb.from('products').update({
+          name: updated.name,
+          category: updated.category,
+          selling_price: updated.sell_price,
+          cost_price: updated.cost_price,
+          unit: updated.unit,
+          cases_per_box: updated.cases_per_box,
+        }).eq('product_id', updated.pos_id);
+        if (error) throw error;
         showToast('✅ Product updated in POS!');
-      } catch(e) { console.error('POS update error:', e); }
+      } catch(e) {
+        console.error('POS update error:', e);
+        showToast('⚠️ Finance updated but POS sync failed: ' + e.message);
+      }
+    } else {
+      showToast('✅ Product updated!');
     }
+
   } else {
+    // ── NEW product ──
+    const p = {
+      id: 'fin-' + Date.now().toString(),
+      pos_id: null,
+      name,
+      category: document.getElementById('prod-category').value,
+      sell_price: parseFloat(document.getElementById('prod-sell-price').value) || 0,
+      cost_price: parseFloat(document.getElementById('prod-cost-price').value) || 0,
+      unit: document.getElementById('prod-unit').value || '',
+      cases_per_box: parseInt(document.getElementById('prod-cases-per-box').value) || 1,
+      barcode: document.getElementById('prod-barcode').value || '',
+      notes: document.getElementById('prod-notes').value || '',
+      icon: '📦'
+    };
     all.unshift(p);
-    // Insert into POS Supabase with correct fields
+    lsSet('fin_products', all);
+    // Insert into POS Supabase
     try {
-      const insertData = {
+      const { data, error } = await sb.from('products').insert({
         name: p.name,
         category: p.category,
         cost_price: p.cost_price,
         selling_price: p.sell_price,
         stock_quantity: 0,
-        unit: p.unit || '',
+        unit: p.unit,
+        cases_per_box: p.cases_per_box,
         low_stock_threshold: 10,
         icon: '📦',
-        photo: null,
         created_at: new Date().toISOString()
-      };
-      const { data, error } = await sb.from('products').insert(insertData).select();
+      }).select().single();
       if (error) throw error;
-      if (data && data[0]) {
-        const posProductId = data[0].product_id;
-        p.pos_id = posProductId;
-        all[0] = p;
-        // Create warehouse_stock and inventory entries
-        await sb.from('warehouse_stock').insert({ product_id: posProductId, quantity: 0, last_updated: new Date().toISOString() });
-        await sb.from('inventory').insert({ product_id: posProductId, quantity: 0, last_updated: new Date().toISOString() });
-        showToast(`✅ Product added to POS! Reload POS app to see it.`);
-      } else {
-        showToast('⚠️ Saved locally but POS sync failed');
+      if (data && data.product_id) {
+        // Save real POS product_id back to fin_products
+        const updatedAll = lsGet('fin_products');
+        const idx2 = updatedAll.findIndex(x => x.id === p.id);
+        if (idx2 >= 0) {
+          updatedAll[idx2].pos_id = data.product_id;
+          lsSet('fin_products', updatedAll);
+        }
+        // Create warehouse & inventory rows
+        await sb.from('warehouse_stock').insert({ product_id: data.product_id, quantity: 0, last_updated: new Date().toISOString() });
+        await sb.from('inventory').insert({ product_id: data.product_id, quantity: 0, last_updated: new Date().toISOString() });
+        showToast('✅ Product added to POS! ID: ' + data.product_id);
       }
     } catch(e) {
-      console.error('POS sync error:', e);
-      showToast('⚠️ Saved locally — POS sync error: ' + e.message);
+      console.error('POS insert error:', e);
+      showToast('⚠️ Saved in Finance but POS sync failed: ' + e.message);
     }
   }
-  lsSet('fin_products', all);
   closeModal('modal-product');
   loadProducts();
 }
@@ -1958,11 +2006,24 @@ function openAddPurchaseOrderModal() {
   const finProds = lsGet('fin_products');
   const sel = document.getElementById('po-add-product');
   if (finProds.length > 0) {
+    // Only show products that have a valid pos_id (real POS integer)
+    const linked = finProds.filter(p => p.pos_id && parseInt(p.pos_id) <= 2147483647);
+    const unlinked = finProds.filter(p => !p.pos_id || parseInt(p.pos_id) > 2147483647);
     sel.innerHTML = '<option value="">Select product...</option>' +
-      finProds.map(function(p) { return '<option value="' + (p.pos_id||p.id) + '" data-name="' + p.name + '" data-cpb="' + (p.cases_per_box||1) + '" data-price="' + (p.cost_price||0) + '">' + (p.icon||'📦') + ' ' + p.name + ' (' + (p.cases_per_box||1) + ' bags/box)</option>'; }).join('');
+      linked.map(function(p) {
+        return '<option value="' + p.pos_id + '" data-posid="' + p.pos_id + '" data-name="' + p.name + '" data-cpb="' + (p.cases_per_box||1) + '" data-price="' + (p.cost_price||0) + '">' +
+          (p.icon||'📦') + ' ' + p.name + ' (' + (p.cases_per_box||1) + ' bags/box)</option>';
+      }).join('') +
+      (unlinked.length ? '<option disabled>── Not linked to POS (' + unlinked.length + ') — Sync first ──</option>' : '');
+    if (linked.length === 0) {
+      sel.innerHTML = '<option value="">⚠️ No linked products — click Sync from POS first</option>';
+    }
   } else {
-    sel.innerHTML = '<option value="">Select product... (Sync first)</option>' +
-      posData.products.map(function(p) { return '<option value="' + p.product_id + '" data-name="' + p.name + '" data-cpb="' + (p.cases_per_box||1) + '" data-price="' + (p.cost_price||0) + '">' + (p.icon||'📦') + ' ' + p.name + '</option>'; }).join('');
+    sel.innerHTML = '<option value="">Select product... (Sync from POS first)</option>' +
+      posData.products.map(function(p) {
+        return '<option value="' + p.product_id + '" data-posid="' + p.product_id + '" data-name="' + p.name + '" data-cpb="' + (p.cases_per_box||1) + '" data-price="' + (p.cost_price||0) + '">' +
+          (p.icon||'📦') + ' ' + p.name + '</option>';
+      }).join('');
   }
   openModal('modal-purchase-order');
 }
@@ -1987,7 +2048,13 @@ function addPOLine() {
   const qty = parseFloat(document.getElementById('po-add-qty').value) || 0;
   const price = parseFloat(document.getElementById('po-add-price').value) || 0;
   if (!qty || !price) { alert('Enter quantity and price'); return; }
-  const posProductId = parseInt(String(opt.value).replace('pos-','')) || null;
+  // pos_id is stored in data-posid attribute — must be a real POS integer ID
+  const rawPosId = opt.dataset.posid || opt.dataset.posId || '';
+  const posProductId = rawPosId ? (parseInt(String(rawPosId).replace('pos-','').replace('fin-','')) || null) : null;
+  if (!posProductId || posProductId > 2147483647) {
+    alert('⚠️ This product is not linked to POS yet.\n\nTo fix: Click "Sync from POS" first, or add the product from the Finance Products page which will create it in POS automatically.');
+    return;
+  }
   const cpb = parseInt(opt.dataset.cpb) || 1;
   const existing = poLines.findIndex(function(l) { return l.posProductId === posProductId; });
   if (existing >= 0) {
@@ -2106,8 +2173,39 @@ function deletePO(id) {
   lsSet('fin_purchase_orders', lsGet('fin_purchase_orders').filter(function(o){return o.id!==id;}));
   loadPurchaseOrders();
 }
-function onPOProductSelect() {}
-function calcPOTotal() {}
+
+// Repair old broken purchases (reapply warehouse stock using correct pos_id from fin_products)
+async function repairOldPurchases() {
+  const finProds = lsGet('fin_products');
+  const posIdByName = {};
+  finProds.forEach(p => { if (p.pos_id && p.pos_id <= 2147483647) posIdByName[p.name.toLowerCase().trim()] = p.pos_id; });
+  const orders = lsGet('fin_purchase_orders');
+  let fixed = 0, errors = [];
+  for (const o of orders) {
+    const lines = o.lines || [{ productName: o.product, qty: o.qty, totalCases: o.total_cases||o.qty, price: o.unit_price||0, total: o.total||0, posProductId: o.pos_product_id }];
+    for (const line of lines) {
+      let pid = line.posProductId;
+      // If broken ID, try to fix by name
+      if (!pid || pid > 2147483647) {
+        pid = posIdByName[(line.productName||'').toLowerCase().trim()];
+      }
+      if (!pid || pid > 2147483647) { errors.push('No valid ID for: ' + line.productName); continue; }
+      try {
+        const { data: ex } = await sb.from('warehouse_stock').select('*').eq('product_id', pid);
+        const addQty = line.totalCases || line.qty || 0;
+        if (ex && ex.length > 0) {
+          await sb.from('warehouse_stock').update({ quantity: (parseFloat(ex[0].quantity)||0) + addQty, last_updated: new Date().toISOString() }).eq('product_id', pid);
+        } else {
+          await sb.from('warehouse_stock').insert({ product_id: pid, quantity: addQty, last_updated: new Date().toISOString() });
+        }
+        fixed++;
+      } catch(e) { errors.push(line.productName + ': ' + e.message); }
+    }
+  }
+  if (errors.length) alert('Repair done. ' + fixed + ' lines updated.\n\nErrors:\n' + errors.join('\n'));
+  else showToast('✅ Repair complete! ' + fixed + ' purchase lines re-applied to warehouse.');
+  await syncData();
+}
 
 
 // ═══════════════════════════════════════════
