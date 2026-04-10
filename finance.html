@@ -1797,6 +1797,7 @@ function loadProducts() {
       <td style="font-weight:700;color:var(--navy);">${trFmt}</td>
       <td>
         <button class="btn btn-outline btn-sm" onclick="editProduct('${p.id}')">✏️</button>
+        <button class="btn btn-outline btn-sm" onclick="setStockManual(${p.pos_id},'${p.name}',${whBags})" style="color:var(--green);" title="Set warehouse stock manually">📦</button>
         <button class="btn btn-danger btn-sm" onclick="deleteProduct('${p.id}')">✕</button>
       </td>
     </tr>`;
@@ -1945,6 +1946,36 @@ function deleteProduct(id) {
   if (!confirm('Delete this product?')) return;
   lsSet('fin_products', lsGet('fin_products').filter(p => p.id !== id));
   loadProducts();
+}
+
+async function setStockManual(posId, name, currentBags) {
+  const cpb = (lsGet('fin_products').find(p=>p.pos_id==posId)||{}).cases_per_box || 4;
+  const currentBoxes = Math.floor(currentBags / cpb);
+  const input = prompt(
+    '📦 Set Warehouse Stock for: ' + name +
+    '\nCurrent: ' + currentBoxes + ' boxes (' + currentBags + ' bags)' +
+    '\n\nEnter BOXES (will be converted to bags automatically):'
+  );
+  if (input === null) return;
+  const boxes = parseInt(input);
+  if (isNaN(boxes) || boxes < 0) { alert('Invalid number'); return; }
+  const bags = boxes * cpb;
+  try {
+    const { data: ex } = await sb.from('warehouse_stock').select('id').eq('product_id', posId);
+    if (ex && ex.length > 0) {
+      await sb.from('warehouse_stock').update({ quantity: bags, last_updated: new Date().toISOString() }).eq('product_id', posId);
+    } else {
+      await sb.from('warehouse_stock').insert({ product_id: posId, quantity: bags, last_updated: new Date().toISOString() });
+    }
+    await sb.from('products').update({ stock_quantity: bags }).eq('product_id', posId);
+    // Refresh local posData
+    const { data: freshWH } = await sb.from('warehouse_stock').select('*');
+    if (freshWH) posData.warehouse_stock = freshWH;
+    loadProducts();
+    showToast('✅ Stock set to ' + boxes + ' boxes (' + bags + ' bags) for ' + name);
+  } catch(e) {
+    alert('Error setting stock: ' + e.message);
+  }
 }
 
 function cleanDuplicateProducts() {
@@ -2273,35 +2304,58 @@ function cleanDuplicatePurchases() {
 
 // Repair old broken purchases (reapply warehouse stock using correct pos_id from fin_products)
 async function repairOldPurchases() {
+  if (!confirm('⚠️ This will RECALCULATE warehouse stock from scratch based on your purchase records.\n\nIt will SET the correct stock (not add on top).\n\nMinus any stock already sold/used will NOT be accounted for here.\n\nContinue?')) return;
+
   const finProds = lsGet('fin_products');
   const posIdByName = {};
-  finProds.forEach(p => { if (p.pos_id && p.pos_id <= 2147483647) posIdByName[p.name.toLowerCase().trim()] = p.pos_id; });
-  const orders = lsGet('fin_purchase_orders');
-  let fixed = 0, errors = [];
-  for (const o of orders) {
-    const lines = o.lines || [{ productName: o.product, qty: o.qty, totalCases: o.total_cases||o.qty, price: o.unit_price||0, total: o.total||0, posProductId: o.pos_product_id }];
+  finProds.forEach(p => { if (p.pos_id && parseInt(p.pos_id) <= 2147483647) posIdByName[p.name.toLowerCase().trim()] = p.pos_id; });
+
+  // First deduplicate purchases
+  const allOrders = lsGet('fin_purchase_orders');
+  const seenRefs = new Set();
+  const deduped = [];
+  [...allOrders].sort((a,b)=>b.id.localeCompare(a.id)).forEach(o => {
+    if (o.invoice_ref && o.invoice_ref.trim()) {
+      const key = o.invoice_ref.trim().toLowerCase() + '|' + o.date;
+      if (seenRefs.has(key)) return;
+      seenRefs.add(key);
+    }
+    deduped.push(o);
+  });
+  lsSet('fin_purchase_orders', deduped);
+
+  // Tally total bags purchased per product_id
+  const totalBagsByProduct = {};
+  for (const o of deduped) {
+    const lines = o.lines || [{ productName: o.product, qty: o.qty, totalCases: o.total_cases||o.qty, posProductId: o.pos_product_id }];
     for (const line of lines) {
-      let pid = line.posProductId;
-      // If broken ID, try to fix by name
-      if (!pid || pid > 2147483647) {
-        pid = posIdByName[(line.productName||'').toLowerCase().trim()];
-      }
-      if (!pid || pid > 2147483647) { errors.push('No valid ID for: ' + line.productName); continue; }
-      try {
-        const { data: ex } = await sb.from('warehouse_stock').select('*').eq('product_id', pid);
-        const addQty = line.totalCases || line.qty || 0;
-        if (ex && ex.length > 0) {
-          await sb.from('warehouse_stock').update({ quantity: (parseFloat(ex[0].quantity)||0) + addQty, last_updated: new Date().toISOString() }).eq('product_id', pid);
-        } else {
-          await sb.from('warehouse_stock').insert({ product_id: pid, quantity: addQty, last_updated: new Date().toISOString() });
-        }
-        fixed++;
-      } catch(e) { errors.push(line.productName + ': ' + e.message); }
+      let pid = parseInt(line.posProductId);
+      if (!pid || pid > 2147483647) pid = posIdByName[(line.productName||'').toLowerCase().trim()];
+      if (!pid || pid > 2147483647) continue;
+      totalBagsByProduct[pid] = (totalBagsByProduct[pid] || 0) + (line.totalCases || line.qty || 0);
     }
   }
-  if (errors.length) alert('Repair done. ' + fixed + ' lines updated.\n\nErrors:\n' + errors.join('\n'));
-  else showToast('✅ Repair complete! ' + fixed + ' purchase lines re-applied to warehouse.');
+
+  // SET warehouse_stock to calculated totals (overwrite, not add)
+  let fixed = 0, errors = [];
+  for (const [pidStr, bags] of Object.entries(totalBagsByProduct)) {
+    const pid = parseInt(pidStr);
+    try {
+      const { data: ex } = await sb.from('warehouse_stock').select('id').eq('product_id', pid);
+      if (ex && ex.length > 0) {
+        await sb.from('warehouse_stock').update({ quantity: bags, last_updated: new Date().toISOString() }).eq('product_id', pid);
+      } else {
+        await sb.from('warehouse_stock').insert({ product_id: pid, quantity: bags, last_updated: new Date().toISOString() });
+      }
+      // Also fix products.stock_quantity
+      await sb.from('products').update({ stock_quantity: bags }).eq('product_id', pid);
+      fixed++;
+    } catch(e) { errors.push('Product ' + pid + ': ' + e.message); }
+  }
+
   await syncData();
+  if (errors.length) alert('Done! ' + fixed + ' products fixed.\n\nErrors:\n' + errors.join('\n'));
+  else showToast('✅ Warehouse recalculated! ' + fixed + ' product(s) updated correctly.');
 }
 
 
