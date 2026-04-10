@@ -1093,30 +1093,45 @@ let posData = { invoices: [], customers: [], products: [], invoice_items: [], ex
 async function syncData() {
   document.getElementById('sync-status').textContent = 'Syncing...';
   try {
-    const [inv, cust, prod, items, exp, wh, truck] = await Promise.all([
+    const [inv, cust, prod, items, exp, wh, truckSettings] = await Promise.all([
       sb.from('invoices').select('*'),
       sb.from('customers').select('*'),
       sb.from('products').select('*'),
       sb.from('invoice_items').select('*'),
       sb.from('expenses').select('*'),
       sb.from('warehouse_stock').select('*'),
-      sb.from('inventory').select('*'),
+      sb.from('settings').select('*'), // truck stock stored here as JSON
     ]);
-    // Normalize dates to YYYY-MM-DD and parse amounts so filters work correctly
     posData.invoices = (inv.data || []).map(i => ({ ...i, date: (i.date || '').slice(0, 10), total_amount: parseFloat(i.total_amount || 0) }));
     posData.customers = cust.data || [];
     posData.products = prod.data || [];
     posData.invoice_items = (items.data || []).map(it => ({ ...it, date: (it.date || '').slice(0, 10), total: parseFloat(it.total || 0), price: parseFloat(it.price || 0) }));
     posData.expenses = (exp.data || []).map(e => ({ ...e, date: (e.date || '').slice(0, 10), amount: parseFloat(e.amount || 0) }));
     posData.warehouse_stock = wh.data || [];
-    posData.inventory = truck.data || [];
-    // Merge warehouse & truck qty into products for easy access
+
+    // ── Read real truck stock from settings (same as POS uses) ──
+    // POS stores truck stock as: settings.key = "truck_stock_Admin", value = JSON {product_id: bags}
+    const settingsRows = truckSettings.data || [];
+    const truckStockMap = {}; // product_id → total bags across all employees
+    settingsRows.forEach(row => {
+      if (row.key && row.key.startsWith('truck_stock_')) {
+        try {
+          const stockObj = JSON.parse(row.value || '{}');
+          Object.entries(stockObj).forEach(([pid, qty]) => {
+            truckStockMap[parseInt(pid)] = (truckStockMap[parseInt(pid)] || 0) + (parseFloat(qty) || 0);
+          });
+        } catch(e) {}
+      }
+    });
+    // Build inventory array from truck stock map for compatibility
+    posData.inventory = Object.entries(truckStockMap).map(([pid, qty]) => ({ product_id: parseInt(pid), quantity: qty }));
+
+    // Merge warehouse & truck qty into products
     const whMap = {}; posData.warehouse_stock.forEach(w => whMap[w.product_id] = w.quantity || 0);
-    const trMap = {}; posData.inventory.forEach(t => trMap[t.product_id] = t.quantity || 0);
     posData.products = posData.products.map(p => ({
       ...p,
       warehouse_qty: whMap[p.product_id] || 0,
-      truck_qty: trMap[p.product_id] || 0
+      truck_qty: truckStockMap[p.product_id] || 0
     }));
     // ── Rebuild fin_products cleanly from POS — no duplicates ever ──
     // Strategy: POS Supabase is the source of truth for product_id.
@@ -1776,7 +1791,7 @@ function loadProducts() {
     const wh = p.pos_id ? (whMap[p.pos_id]||0) : 0;
     totalWHBags += wh;
     totalWHBoxes += Math.floor(wh / cpb);
-    totalWHValue += wh * ((p.cost_price||0) / cpb);
+    totalWHValue += Math.floor(wh / cpb) * (p.cost_price||0);
   });
   document.getElementById('prod-wh-total').textContent = totalWHBoxes + ' boxes total';
   document.getElementById('prod-wh-value').textContent = fmt(totalWHValue);
