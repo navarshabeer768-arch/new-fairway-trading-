@@ -471,7 +471,7 @@ tr:hover td{background:#f8f9ff;}
         </div>
         <div class="card-body">
           <table>
-            <thead><tr><th>Date</th><th>Invoice #</th><th>Product</th><th>Qty (Boxes)</th><th>Unit Price (QR)</th><th>Total (QR)</th><th>Status</th><th>Action</th></tr></thead>
+            <thead><tr><th>Date</th><th>Invoice #</th><th>Products</th><th style="text-align:center;">Boxes</th><th>Total (QR)</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="purchase-order-list"></tbody>
           </table>
         </div>
@@ -768,43 +768,80 @@ tr:hover td{background:#f8f9ff;}
 </div>
 
 <div class="modal-overlay" id="modal-purchase-order">
-  <div class="modal">
-    <div class="modal-title">New Purchase from Alaa (Oman)</div>
+  <div class="modal" style="width:680px;max-width:98vw;">
+    <div class="modal-title">🧾 New Purchase Invoice — Alaa (Oman)</div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Date</label><input type="date" class="form-input" id="po-date"></div>
-      <div class="form-group"><label class="form-label">Alaa Invoice #</label><input type="text" class="form-input" id="po-inv" placeholder="Alaa invoice number"></div>
-    </div>
-    <div class="form-group" style="margin-bottom:16px;">
-      <label class="form-label">Product <span style="color:var(--text2);font-weight:400;">— links to warehouse stock</span></label>
-      <select class="form-select" id="po-product-id" onchange="onPOProductSelect()">
-        <option value="">Select product...</option>
-      </select>
-    </div>
-    <div id="po-cases-info" style="display:none;background:#e3f2fd;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#0d47a1;">
-      📦 <span id="po-cases-text">1 box = ? bags</span>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Quantity (Boxes)</label><input type="number" class="form-input" id="po-qty" placeholder="0" oninput="calcPOTotal()"></div>
-      <div class="form-group"><label class="form-label">Total Bags <span style="color:var(--text2);font-weight:400;">(auto)</span></label><input type="number" class="form-input" id="po-total-cases" placeholder="0" style="background:#f5f5f5;" readonly></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Unit Price per Box (QR)</label><input type="number" class="form-input" id="po-unit-price" placeholder="0.00" oninput="calcPOTotal()"></div>
-      <div class="form-group"><label class="form-label">Total Amount (QR)</label><input type="number" class="form-input" id="po-total" placeholder="0.00" style="background:#f5f5f5;" readonly></div>
+      <div class="form-group"><label class="form-label">Alaa Invoice #</label><input type="text" class="form-input" id="po-inv" placeholder="e.g. ALQ-2025-001"></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Payment Status</label>
         <select class="form-select" id="po-status">
-          <option value="paid">Paid</option>
-          <option value="pending">Pending</option>
-          <option value="partial">Partial</option>
+          <option value="paid">✅ Paid</option>
+          <option value="pending">⏳ Pending</option>
+          <option value="partial">🔶 Partial</option>
         </select>
       </div>
       <div class="form-group"><label class="form-label">Notes</label><input type="text" class="form-input" id="po-notes" placeholder="Any notes"></div>
     </div>
-    <div style="background:#e8f5e9;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--green);font-weight:700;">
-      ✅ Saving this purchase will automatically add bags to POS Warehouse stock
+
+    <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;">Products</div>
+
+    <!-- ADD PRODUCT ROW -->
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;background:#f8f9ff;padding:10px;border-radius:8px;">
+      <div class="form-group" style="margin:0;">
+        <label class="form-label">Product</label>
+        <select class="form-select" id="po-add-product" onchange="onPOAddProductSelect()" style="font-size:12px;">
+          <option value="">Select product...</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label">Boxes</label>
+        <input type="number" class="form-input" id="po-add-qty" placeholder="0" min="0" oninput="calcPOAddTotal()" style="font-size:12px;">
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label">Price/Box (QR)</label>
+        <input type="number" class="form-input" id="po-add-price" placeholder="0.00" min="0" oninput="calcPOAddTotal()" style="font-size:12px;">
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label">Line Total</label>
+        <input type="text" class="form-input" id="po-add-total" readonly style="background:#f0f0f0;font-size:12px;">
+      </div>
+      <button class="btn btn-primary" onclick="addPOLine()" style="padding:9px 14px;font-size:18px;line-height:1;">+</button>
     </div>
-    <div class="modal-footer"><button class="btn btn-outline" onclick="closeModal('modal-purchase-order')">Cancel</button><button class="btn btn-primary" onclick="savePurchaseOrder()">💾 Save & Update Warehouse</button></div>
+
+    <!-- PRODUCT LINES TABLE -->
+    <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:12px;min-height:60px;">
+      <table style="width:100%;font-size:13px;">
+        <thead><tr style="background:#f8f9ff;">
+          <th style="padding:8px 10px;text-align:left;">Product</th>
+          <th style="padding:8px 10px;text-align:center;">Boxes</th>
+          <th style="padding:8px 10px;text-align:center;">Bags</th>
+          <th style="padding:8px 10px;text-align:right;">Price/Box</th>
+          <th style="padding:8px 10px;text-align:right;">Total</th>
+          <th style="padding:8px 10px;"></th>
+        </tr></thead>
+        <tbody id="po-lines-body">
+          <tr><td colspan="6" style="text-align:center;padding:16px;color:#999;font-size:12px;">No products added yet — use the form above</td></tr>
+        </tbody>
+        <tfoot id="po-lines-foot" style="display:none;">
+          <tr style="background:#e8f5e9;font-weight:700;">
+            <td colspan="4" style="padding:10px 10px;text-align:right;font-size:13px;">TOTAL INVOICE AMOUNT:</td>
+            <td style="padding:10px 10px;text-align:right;font-size:15px;color:var(--navy);" id="po-grand-total">QR 0.00</td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div style="background:#e8f5e9;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--green);font-weight:700;">
+      ✅ Saving this purchase will automatically add stock to POS Warehouse for all products
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-purchase-order')">Cancel</button>
+      <button class="btn btn-outline" onclick="printPurchaseInvoice()" style="color:var(--navy);">🖨️ Print Invoice</button>
+      <button class="btn btn-primary" onclick="savePurchaseOrder()">💾 Save & Update Warehouse</button>
+    </div>
   </div>
 </div>
 
@@ -1099,12 +1136,17 @@ async function syncData() {
     if (newFromPOS.length > 0) {
       lsSet('fin_products', [...finProds, ...newFromPOS]);
     }
-    document.getElementById('sync-status').textContent = 'Last sync: ' + new Date().toLocaleTimeString();
+    document.getElementById('sync-status').textContent = '✅ Synced: ' + new Date().toLocaleTimeString();
+    // Always reload the active page after sync so data appears
     const activePage = document.querySelector('.page.active');
     if (activePage) loadCurrentPage(activePage.id.replace('page-', ''));
+    // Populate customer dropdown for ledger
+    const custOpts = posData.customers.map(c => `<option value="${c.customer_id}">${c.name}</option>`).join('');
+    const ledgerCust = document.getElementById('ledger-customer');
+    if (ledgerCust) ledgerCust.innerHTML = '<option value="">All Customers</option>' + custOpts;
   } catch(e) {
-    document.getElementById('sync-status').textContent = 'Sync failed';
-    console.error(e);
+    document.getElementById('sync-status').textContent = '❌ Sync failed — check connection';
+    console.error('syncData error:', e);
   }
 }
 
@@ -1863,164 +1905,210 @@ function switchPurchaseTab(tab) {
   loadPurchaseOrders();
 }
 
+// ═══════════════════════════════════════════
+// PURCHASE ORDERS — Multi-product
+// ═══════════════════════════════════════════
+let poLines = [];
+
 function loadPurchaseOrders() {
   const orders = lsGet('fin_purchase_orders');
   const from = document.getElementById('pur-from')?.value || '';
   const to = document.getElementById('pur-to')?.value || '';
   const filtered = orders.filter(o => (!from || o.date >= from) && (!to || o.date <= to));
-  const total = filtered.reduce((a,o) => a+o.total, 0);
-  const pending = filtered.filter(o=>o.status==='pending'||o.status==='partial').reduce((a,o)=>a+o.total,0);
-  const paid = filtered.filter(o=>o.status==='paid').reduce((a,o)=>a+o.total,0);
-  const units = filtered.reduce((a,o) => a+(o.qty||0), 0);
+  const total = filtered.reduce((a,o) => a+(o.grand_total||o.total||0), 0);
+  const pending = filtered.filter(o=>o.status==='pending'||o.status==='partial').reduce((a,o)=>a+(o.grand_total||o.total||0),0);
+  const paid = filtered.filter(o=>o.status==='paid').reduce((a,o)=>a+(o.grand_total||o.total||0),0);
+  const units = filtered.reduce((a,o) => { if(o.lines) return a+o.lines.reduce((b,l)=>b+(l.qty||0),0); return a+(o.qty||0); }, 0);
   document.getElementById('pur-total').textContent = fmt(total);
   document.getElementById('pur-pending').textContent = fmt(pending);
   document.getElementById('pur-paid').textContent = fmt(paid);
   document.getElementById('pur-units').textContent = units + ' boxes';
   document.getElementById('purchase-order-list').innerHTML = filtered.sort((a,b)=>b.date.localeCompare(a.date)).map(o => {
-    const cpb = o.cases_per_box || 1;
-    const totalBags = o.total_cases || (o.qty * cpb);
-    const bagsFmt = fmtStock(totalBags, cpb);
-    return `<tr>
-      <td>${o.date}</td>
-      <td><strong>${o.invoice_ref||'—'}</strong></td>
-      <td>${o.product}</td>
-      <td style="text-align:center;font-weight:700;">${o.qty} box${o.qty!==1?'es':''}<br><small style="color:var(--text2);">${bagsFmt}</small></td>
-      <td>${fmt(o.unit_price)}</td>
-      <td style="font-weight:700;color:var(--navy);">${fmt(o.total)}</td>
-      <td><span class="badge badge-${o.status==='paid'?'green':o.status==='pending'?'red':'gold'}">${o.status}</span></td>
-      <td>
-        ${o.status!=='paid'?`<button class="btn btn-success btn-sm" onclick="markPOPaid('${o.id}')">✅ Paid</button>`:''}
-        <button class="btn btn-danger btn-sm" onclick="deletePO('${o.id}')">✕</button>
-      </td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="8" style="text-align:center;padding:20px;color:#999;">No purchases yet</td></tr>';
+    const lines = o.lines || [{ productName: o.product, qty: o.qty, total_cases: o.total_cases||o.qty, price: o.unit_price||0, total: o.total||0 }];
+    const grandTotal = o.grand_total || o.total || 0;
+    const productSummary = lines.map(l => (l.productName||l.product||'?') + ' (' + (l.qty||0) + ' boxes)').join(', ');
+    const totalBoxes = lines.reduce((a,l)=>a+(l.qty||0),0);
+    const statusBadge = o.status==='paid'?'green':o.status==='pending'?'red':'gold';
+    return '<tr>' +
+      '<td>' + o.date + '</td>' +
+      '<td><strong>' + (o.invoice_ref||'—') + '</strong></td>' +
+      '<td style="max-width:200px;font-size:12px;">' + productSummary + '</td>' +
+      '<td style="text-align:center;font-weight:700;">' + totalBoxes + '</td>' +
+      '<td style="font-weight:700;color:var(--navy);">' + fmt(grandTotal) + '</td>' +
+      '<td><span class="badge badge-' + statusBadge + '">' + o.status + '</span></td>' +
+      '<td style="display:flex;gap:4px;flex-wrap:wrap;">' +
+        '<button class="btn btn-outline btn-sm" onclick="printSavedPO(\'' + o.id + '\')">🖨️</button>' +
+        (o.status!=='paid' ? '<button class="btn btn-success btn-sm" onclick="markPOPaid(\'' + o.id + '\')">✅</button>' : '') +
+        '<button class="btn btn-danger btn-sm" onclick="deletePO(\'' + o.id + '\')">✕</button>' +
+      '</td>' +
+    '</tr>';
+  }).join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;color:#999;">No purchases yet</td></tr>';
 }
 
 function openAddPurchaseOrderModal() {
+  poLines = [];
   document.getElementById('po-date').value = today();
   document.getElementById('po-inv').value = '';
-  document.getElementById('po-qty').value = '';
-  document.getElementById('po-unit-price').value = '';
-  document.getElementById('po-total').value = '';
   document.getElementById('po-notes').value = '';
-  // Populate from Finance products first, fallback to POS products
+  document.getElementById('po-status').value = 'pending';
+  document.getElementById('po-add-qty').value = '';
+  document.getElementById('po-add-price').value = '';
+  document.getElementById('po-add-total').value = '';
+  renderPOLines();
   const finProds = lsGet('fin_products');
-  const sel = document.getElementById('po-product-id');
+  const sel = document.getElementById('po-add-product');
   if (finProds.length > 0) {
     sel.innerHTML = '<option value="">Select product...</option>' +
-      finProds.map(p => `<option value="${p.id}" data-price="${p.cost_price||0}" data-cases-per-box="${p.cases_per_box||1}" data-pos-id="${p.pos_id||p.id}">${p.icon||'📦'} ${p.name} (${p.cases_per_box||1} bags/box)</option>`).join('');
+      finProds.map(function(p) { return '<option value="' + (p.pos_id||p.id) + '" data-name="' + p.name + '" data-cpb="' + (p.cases_per_box||1) + '" data-price="' + (p.cost_price||0) + '">' + (p.icon||'📦') + ' ' + p.name + ' (' + (p.cases_per_box||1) + ' bags/box)</option>'; }).join('');
   } else {
-    sel.innerHTML = '<option value="">Select product...</option>' +
-      posData.products.map(p => `<option value="${p.product_id}" data-price="${p.selling_price||0}" data-cases-per-box="1" data-pos-id="${p.product_id}">${p.icon||'📦'} ${p.name}</option>`).join('');
+    sel.innerHTML = '<option value="">Select product... (Sync first)</option>' +
+      posData.products.map(function(p) { return '<option value="' + p.product_id + '" data-name="' + p.name + '" data-cpb="' + (p.cases_per_box||1) + '" data-price="' + (p.cost_price||0) + '">' + (p.icon||'📦') + ' ' + p.name + '</option>'; }).join('');
   }
-  document.getElementById('po-cases-info').style.display = 'none';
-  document.getElementById('po-total-cases').value = '';
   openModal('modal-purchase-order');
 }
 
-function calcPOTotal() {
-  const qty = parseFloat(document.getElementById('po-qty').value) || 0;
-  const price = parseFloat(document.getElementById('po-unit-price').value) || 0;
-  document.getElementById('po-total').value = (qty * price).toFixed(2);
-  // Calculate total cases
-  const sel = document.getElementById('po-product-id');
+function onPOAddProductSelect() {
+  const sel = document.getElementById('po-add-product');
   const opt = sel.options[sel.selectedIndex];
-  const cpb = parseInt(opt?.dataset.casesPerBox) || 1;
-  document.getElementById('po-total-cases').value = qty * cpb;
-}
-
-function onPOProductSelect() {
-  const sel = document.getElementById('po-product-id');
-  const opt = sel.options[sel.selectedIndex];
-  if (opt && opt.value) {
-    const cpb = parseInt(opt.dataset.casesPerBox) || 1;
-    document.getElementById('po-cases-info').style.display = '';
-    document.getElementById('po-cases-text').textContent = `1 box = ${cpb} bags — enter boxes below, total bags will auto-calculate`;
-    if (opt.dataset.price) document.getElementById('po-unit-price').value = opt.dataset.price;
-    calcPOTotal();
-  } else {
-    document.getElementById('po-cases-info').style.display = 'none';
+  if (opt && opt.value && opt.dataset.price) {
+    document.getElementById('po-add-price').value = opt.dataset.price || '';
+    calcPOAddTotal();
   }
+}
+function calcPOAddTotal() {
+  const qty = parseFloat(document.getElementById('po-add-qty').value) || 0;
+  const price = parseFloat(document.getElementById('po-add-price').value) || 0;
+  document.getElementById('po-add-total').value = qty && price ? 'QR ' + (qty * price).toFixed(2) : '';
+}
+function addPOLine() {
+  const sel = document.getElementById('po-add-product');
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || !opt.value) { alert('Please select a product'); return; }
+  const qty = parseFloat(document.getElementById('po-add-qty').value) || 0;
+  const price = parseFloat(document.getElementById('po-add-price').value) || 0;
+  if (!qty || !price) { alert('Enter quantity and price'); return; }
+  const posProductId = parseInt(String(opt.value).replace('pos-','')) || null;
+  const cpb = parseInt(opt.dataset.cpb) || 1;
+  const existing = poLines.findIndex(function(l) { return l.posProductId === posProductId; });
+  if (existing >= 0) {
+    poLines[existing].qty += qty;
+    poLines[existing].totalCases = poLines[existing].qty * cpb;
+    poLines[existing].total = poLines[existing].qty * poLines[existing].price;
+  } else {
+    poLines.push({ posProductId: posProductId, productName: opt.dataset.name || opt.text, cpb: cpb, qty: qty, price: price, totalCases: qty * cpb, total: qty * price });
+  }
+  sel.value = '';
+  document.getElementById('po-add-qty').value = '';
+  document.getElementById('po-add-price').value = '';
+  document.getElementById('po-add-total').value = '';
+  renderPOLines();
+}
+function removePOLine(idx) { poLines.splice(idx, 1); renderPOLines(); }
+function renderPOLines() {
+  const tbody = document.getElementById('po-lines-body');
+  const tfoot = document.getElementById('po-lines-foot');
+  if (!poLines.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:16px;color:#999;font-size:12px;">No products added yet — use the form above</td></tr>';
+    tfoot.style.display = 'none';
+    return;
+  }
+  const grandTotal = poLines.reduce(function(a,l){return a+l.total;},0);
+  tbody.innerHTML = poLines.map(function(l,i) {
+    return '<tr>' +
+      '<td style="padding:8px 10px;font-weight:600;">' + l.productName + '</td>' +
+      '<td style="padding:8px 10px;text-align:center;">' + l.qty + '</td>' +
+      '<td style="padding:8px 10px;text-align:center;color:var(--text2);">' + l.totalCases + ' bags</td>' +
+      '<td style="padding:8px 10px;text-align:right;">QR ' + l.price.toFixed(2) + '</td>' +
+      '<td style="padding:8px 10px;text-align:right;font-weight:700;color:var(--navy);">QR ' + l.total.toFixed(2) + '</td>' +
+      '<td style="padding:4px;"><button class="btn btn-danger btn-sm" onclick="removePOLine(' + i + ')" style="padding:3px 8px;">✕</button></td>' +
+    '</tr>';
+  }).join('');
+  tfoot.style.display = '';
+  document.getElementById('po-grand-total').textContent = 'QR ' + grandTotal.toFixed(2);
 }
 
 async function savePurchaseOrder() {
-  const sel = document.getElementById('po-product-id');
-  const productId = sel.value;
-  const opt = sel.options[sel.selectedIndex];
-  const productName = opt?.text || '';
-  const cpb = parseInt(opt?.dataset.casesPerBox) || 1;
-  // Strip any "pos-" prefix and parse as integer for Supabase FK
-  const rawPosId = opt?.dataset.posId || productId;
-  const posProductId = parseInt(String(rawPosId).replace('pos-', '')) || null;
-  const qty = parseFloat(document.getElementById('po-qty').value) || 0;
-  const totalCases = qty * cpb;
-  const unitPrice = parseFloat(document.getElementById('po-unit-price').value) || 0;
-  const total = parseFloat(document.getElementById('po-total').value) || qty * unitPrice;
-  if (!productId) { alert('Please select a product'); return; }
-  if (!qty || !total) { alert('Enter quantity and price'); return; }
-  if (!posProductId || isNaN(posProductId)) { alert('Could not link product to POS. Please sync first.'); return; }
+  if (!poLines.length) { alert('Please add at least one product'); return; }
+  const grandTotal = poLines.reduce(function(a,l){return a+l.total;},0);
   const o = {
     id: Date.now().toString(),
     date: document.getElementById('po-date').value,
     invoice_ref: document.getElementById('po-inv').value,
-    product_id: productId,
-    pos_product_id: posProductId,
-    product: productName,
-    qty, total_cases: totalCases, cases_per_box: cpb,
-    unit_price: unitPrice, total,
     status: document.getElementById('po-status').value,
-    notes: document.getElementById('po-notes').value
+    notes: document.getElementById('po-notes').value,
+    grand_total: grandTotal,
+    lines: poLines.map(function(l){return Object.assign({},l);}),
+    product: poLines.map(function(l){return l.productName;}).join(', '),
+    qty: poLines.reduce(function(a,l){return a+l.qty;},0),
+    total: grandTotal
   };
-  // Save to finance localStorage
   const all = lsGet('fin_purchase_orders'); all.unshift(o); lsSet('fin_purchase_orders', all);
-  // ✅ Update POS warehouse_stock via Supabase
-  try {
-    const { data: existing, error: fetchErr } = await sb.from('warehouse_stock').select('*').eq('product_id', posProductId);
-    if (fetchErr) throw new Error('Fetch error: ' + fetchErr.message);
-    if (existing && existing.length > 0) {
-      const newQty = (parseFloat(existing[0].quantity) || 0) + totalCases;
-      const { error: updErr } = await sb.from('warehouse_stock').update({ quantity: newQty, last_updated: new Date().toISOString() }).eq('product_id', posProductId);
-      if (updErr) throw new Error('Update error: ' + updErr.message);
-    } else {
-      const { error: insErr } = await sb.from('warehouse_stock').insert({ product_id: posProductId, quantity: totalCases, last_updated: new Date().toISOString() });
-      if (insErr) throw new Error('Insert error: ' + insErr.message);
-    }
-    // Also update products.stock_quantity so POS shows correct warehouse stock
-    const { data: prodRow } = await sb.from('products').select('stock_quantity').eq('product_id', posProductId).single();
-    if (prodRow) {
-      const newStock = (parseFloat(prodRow.stock_quantity) || 0) + totalCases;
-      await sb.from('products').update({ stock_quantity: newStock }).eq('product_id', posProductId);
-    }
-    showToast(`✅ Purchase saved! +${qty} boxes = +${totalCases} bags added to warehouse`);
-  } catch(e) {
-    console.error('Warehouse sync error:', e);
-    showToast('⚠️ Purchase saved but warehouse sync failed: ' + e.message);
-    alert('Warehouse sync error: ' + e.message + '\n\nMake sure you clicked "Sync from POS" first so products are linked.');
+  let successCount = 0, errorMsgs = [];
+  for (const line of poLines) {
+    if (!line.posProductId) { errorMsgs.push(line.productName + ': no POS ID'); continue; }
+    try {
+      const { data: existing, error: fetchErr } = await sb.from('warehouse_stock').select('*').eq('product_id', line.posProductId);
+      if (fetchErr) throw new Error(fetchErr.message);
+      if (existing && existing.length > 0) {
+        const newQty = (parseFloat(existing[0].quantity)||0) + line.totalCases;
+        const { error: updErr } = await sb.from('warehouse_stock').update({ quantity: newQty, last_updated: new Date().toISOString() }).eq('product_id', line.posProductId);
+        if (updErr) throw new Error(updErr.message);
+      } else {
+        const { error: insErr } = await sb.from('warehouse_stock').insert({ product_id: line.posProductId, quantity: line.totalCases, last_updated: new Date().toISOString() });
+        if (insErr) throw new Error(insErr.message);
+      }
+      const { data: prodRow } = await sb.from('products').select('stock_quantity').eq('product_id', line.posProductId).single();
+      if (prodRow) await sb.from('products').update({ stock_quantity: (parseFloat(prodRow.stock_quantity)||0) + line.totalCases }).eq('product_id', line.posProductId);
+      successCount++;
+    } catch(e) { errorMsgs.push(line.productName + ': ' + e.message); }
   }
+  if (errorMsgs.length) alert('⚠️ Purchase saved but some warehouse updates failed:\n\n' + errorMsgs.join('\n') + '\n\nMake sure you Sync from POS first.');
+  else showToast('✅ Purchase saved! ' + successCount + ' product(s) added to warehouse');
   closeModal('modal-purchase-order');
   loadPurchaseOrders();
 }
 
-function showToast(msg) {
-  const t = document.createElement('div');
-  t.textContent = msg;
-  t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1a237e;color:#fff;padding:12px 20px;border-radius:8px;font-size:13px;font-weight:700;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,.3);';
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 3000);
+function printPurchaseInvoice() {
+  if (!poLines.length) { alert('Add products first'); return; }
+  _doPrintPO({ invoice_ref: document.getElementById('po-inv').value||'—', date: document.getElementById('po-date').value, status: document.getElementById('po-status').value, notes: document.getElementById('po-notes').value, lines: poLines, grand_total: poLines.reduce(function(a,l){return a+l.total;},0) });
+}
+function printSavedPO(id) {
+  const o = lsGet('fin_purchase_orders').find(function(x){return x.id===id;});
+  if (!o) return;
+  const lines = o.lines || [{ productName: o.product, qty: o.qty, totalCases: o.total_cases||o.qty, price: o.unit_price||0, total: o.total||0 }];
+  _doPrintPO(Object.assign({},o,{lines:lines}));
+}
+function _doPrintPO(o) {
+  const grandTotal = o.grand_total || o.lines.reduce(function(a,l){return a+l.total;},0);
+  const win = window.open('','_blank');
+  const rows = o.lines.map(function(l,i){
+    return '<tr><td>'+(i+1)+'</td><td>'+(l.productName||l.product||'—')+'</td><td style="text-align:center;">'+l.qty+'</td><td style="text-align:center;">'+(l.totalCases||l.total_cases||l.qty)+'</td><td style="text-align:right;">QR '+parseFloat(l.price||l.unit_price||0).toFixed(2)+'</td><td style="text-align:right;font-weight:700;">QR '+parseFloat(l.total||0).toFixed(2)+'</td></tr>';
+  }).join('');
+  const statusClass = o.status||'pending';
+  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Purchase Invoice '+o.invoice_ref+'</title><style>*{box-sizing:border-box;margin:0;padding:0;font-family:Segoe UI,Arial,sans-serif;}body{padding:32px;color:#111;font-size:13px;}.hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;padding-bottom:16px;border-bottom:3px solid #1a237e;}.co{font-size:20px;font-weight:900;color:#1a237e;}.co-sub{font-size:11px;color:#555;margin-top:2px;}.inv-title{font-size:22px;font-weight:900;color:#1a237e;text-align:right;}.inv-ref{font-size:13px;color:#555;text-align:right;margin-top:4px;}.meta{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;padding:14px;background:#f8f9ff;border-radius:8px;border:1px solid #dde1f0;}.ml{font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;}.mv{font-size:13px;font-weight:600;color:#111;margin-top:2px;}table{width:100%;border-collapse:collapse;margin-bottom:20px;}th{background:#1a237e;color:#fff;padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;text-align:left;}td{padding:10px 12px;border-bottom:1px solid #eee;font-size:13px;}tr:nth-child(even) td{background:#f8f9ff;}.tot td{font-weight:900;font-size:15px;color:#1a237e;background:#e8f5e9!important;border-top:2px solid #1a237e;}.footer{text-align:center;font-size:11px;color:#aaa;margin-top:20px;padding-top:12px;border-top:1px solid #eee;}.badge{display:inline-block;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;}.paid{background:#e8f5e9;color:#1b5e20;}.pending{background:#ffebee;color:#b71c1c;}.partial{background:#fff8e1;color:#f57f17;}@media print{button{display:none!important;}}</style></head><body>');
+  win.document.write('<div class="hdr"><div><div class="co">NEW FAIR WAY TRADING</div><div class="co-sub">نيو فيرفي تريدينغ — Doha, Qatar</div></div><div><div class="inv-title">PURCHASE INVOICE</div><div class="inv-ref"># '+(o.invoice_ref||'—')+'</div></div></div>');
+  win.document.write('<div class="meta"><div><div class="ml">Supplier</div><div class="mv">Alaa Trading — Oman</div></div><div><div class="ml">Date</div><div class="mv">'+o.date+'</div></div><div><div class="ml">Payment Status</div><div class="mv"><span class="badge '+statusClass+'">'+(o.status||'—').toUpperCase()+'</span></div></div><div><div class="ml">Notes</div><div class="mv">'+(o.notes||'—')+'</div></div></div>');
+  win.document.write('<table><thead><tr><th>#</th><th>Product</th><th style="text-align:center;">Boxes</th><th style="text-align:center;">Total Bags</th><th style="text-align:right;">Price/Box</th><th style="text-align:right;">Amount</th></tr></thead><tbody>'+rows+'</tbody><tfoot><tr class="tot"><td colspan="5" style="text-align:right;padding:12px;">TOTAL AMOUNT</td><td style="text-align:right;padding:12px;">QR '+grandTotal.toFixed(2)+'</td></tr></tfoot></table>');
+  win.document.write('<div class="footer">New Fair Way Trading — Doha, Qatar | Generated '+new Date().toLocaleString()+'</div>');
+  win.document.write('<div style="text-align:center;margin-top:16px;"><button onclick="window.print()" style="background:#1a237e;color:#fff;border:none;padding:10px 28px;border-radius:6px;font-size:14px;font-weight:700;cursor:pointer;">🖨️ Print</button></div>');
+  win.document.write('</body></html>');
+  win.document.close();
 }
 
 function markPOPaid(id) {
   const all = lsGet('fin_purchase_orders');
-  const idx = all.findIndex(o => o.id === id);
+  const idx = all.findIndex(function(o){return o.id===id;});
   if (idx >= 0) { all[idx].status = 'paid'; lsSet('fin_purchase_orders', all); }
   loadPurchaseOrders();
 }
-
 function deletePO(id) {
   if (!confirm('Delete this purchase?')) return;
-  lsSet('fin_purchase_orders', lsGet('fin_purchase_orders').filter(o => o.id !== id));
+  lsSet('fin_purchase_orders', lsGet('fin_purchase_orders').filter(function(o){return o.id!==id;}));
   loadPurchaseOrders();
 }
+function onPOProductSelect() {}
+function calcPOTotal() {}
+
 
 // ═══════════════════════════════════════════
 // IMPORT & EXTRA COSTS
@@ -2357,11 +2445,8 @@ async function init() {
   document.getElementById('ic-to').value = today();
   document.getElementById('cogs-from').value = monthStart();
   document.getElementById('cogs-to').value = today();
-  // Sync data
+  // Sync data then reload active page
   await syncData();
-  // Populate customer dropdown
-  const custOpts = posData.customers.map(c => `<option value="${c.customer_id}">${c.name}</option>`).join('');
-  document.getElementById('ledger-customer').innerHTML = '<option value="">All Customers</option>' + custOpts;
 }
 init();
 </script>
