@@ -453,6 +453,7 @@ tr:hover td{background:#f8f9ff;}
           <div class="tab active" onclick="switchPurchaseTab('list')">📦 Purchase Orders</div>
           <div class="tab" onclick="switchPurchaseTab('summary')">📊 Summary</div>
         </div>
+        <button class="btn btn-outline btn-sm" onclick="cleanDuplicatePurchases()" style="color:var(--red);" title="Remove duplicate purchases">🧹 Clean Duplicates</button>
         <button class="btn btn-outline btn-sm" onclick="repairOldPurchases()" title="Re-apply all old purchases to warehouse stock" style="color:var(--gold);">🔧 Repair Warehouse</button>
         <button class="btn btn-primary btn-sm" onclick="openAddPurchaseOrderModal()">+ New Purchase</button>
       </div>
@@ -2118,45 +2119,91 @@ function renderPOLines() {
   document.getElementById('po-grand-total').textContent = 'QR ' + grandTotal.toFixed(2);
 }
 
+let _poSaving = false; // guard against double-click saves
+
 async function savePurchaseOrder() {
+  if (_poSaving) { showToast('⏳ Already saving, please wait...'); return; }
   if (!poLines.length) { alert('Please add at least one product'); return; }
-  const grandTotal = poLines.reduce(function(a,l){return a+l.total;},0);
-  const o = {
-    id: Date.now().toString(),
-    date: document.getElementById('po-date').value,
-    invoice_ref: document.getElementById('po-inv').value,
-    status: document.getElementById('po-status').value,
-    notes: document.getElementById('po-notes').value,
-    grand_total: grandTotal,
-    lines: poLines.map(function(l){return Object.assign({},l);}),
-    product: poLines.map(function(l){return l.productName;}).join(', '),
-    qty: poLines.reduce(function(a,l){return a+l.qty;},0),
-    total: grandTotal
-  };
-  const all = lsGet('fin_purchase_orders'); all.unshift(o); lsSet('fin_purchase_orders', all);
-  let successCount = 0, errorMsgs = [];
-  for (const line of poLines) {
-    if (!line.posProductId) { errorMsgs.push(line.productName + ': no POS ID'); continue; }
-    try {
-      const { data: existing, error: fetchErr } = await sb.from('warehouse_stock').select('*').eq('product_id', line.posProductId);
-      if (fetchErr) throw new Error(fetchErr.message);
-      if (existing && existing.length > 0) {
-        const newQty = (parseFloat(existing[0].quantity)||0) + line.totalCases;
-        const { error: updErr } = await sb.from('warehouse_stock').update({ quantity: newQty, last_updated: new Date().toISOString() }).eq('product_id', line.posProductId);
-        if (updErr) throw new Error(updErr.message);
-      } else {
-        const { error: insErr } = await sb.from('warehouse_stock').insert({ product_id: line.posProductId, quantity: line.totalCases, last_updated: new Date().toISOString() });
-        if (insErr) throw new Error(insErr.message);
-      }
-      const { data: prodRow } = await sb.from('products').select('stock_quantity').eq('product_id', line.posProductId).single();
-      if (prodRow) await sb.from('products').update({ stock_quantity: (parseFloat(prodRow.stock_quantity)||0) + line.totalCases }).eq('product_id', line.posProductId);
-      successCount++;
-    } catch(e) { errorMsgs.push(line.productName + ': ' + e.message); }
+
+  // Duplicate invoice check — same date + same invoice_ref
+  const invRef = document.getElementById('po-inv').value.trim();
+  const poDate = document.getElementById('po-date').value;
+  if (invRef) {
+    const existing = lsGet('fin_purchase_orders');
+    const dup = existing.find(o => o.invoice_ref && o.invoice_ref.trim() === invRef && o.date === poDate);
+    if (dup) {
+      if (!confirm('⚠️ A purchase with invoice # "' + invRef + '" on ' + poDate + ' already exists.\n\nSave anyway?')) return;
+    }
   }
-  if (errorMsgs.length) alert('⚠️ Purchase saved but some warehouse updates failed:\n\n' + errorMsgs.join('\n') + '\n\nMake sure you Sync from POS first.');
-  else showToast('✅ Purchase saved! ' + successCount + ' product(s) added to warehouse');
-  closeModal('modal-purchase-order');
-  loadPurchaseOrders();
+
+  _poSaving = true;
+  // Disable save button visually
+  const saveBtn = document.querySelector('#modal-purchase-order .btn-primary');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving...'; }
+
+  try {
+    const grandTotal = poLines.reduce(function(a,l){return a+l.total;},0);
+    const o = {
+      id: Date.now().toString(),
+      date: poDate,
+      invoice_ref: invRef,
+      status: document.getElementById('po-status').value,
+      notes: document.getElementById('po-notes').value,
+      grand_total: grandTotal,
+      lines: poLines.map(function(l){return Object.assign({},l);}),
+      product: poLines.map(function(l){return l.productName;}).join(', '),
+      qty: poLines.reduce(function(a,l){return a+l.qty;},0),
+      total: grandTotal
+    };
+    // Save to localStorage
+    const all = lsGet('fin_purchase_orders');
+    all.unshift(o);
+    lsSet('fin_purchase_orders', all);
+
+    // Update warehouse_stock in Supabase for each line
+    let successCount = 0, errorMsgs = [];
+    for (const line of poLines) {
+      if (!line.posProductId) { errorMsgs.push(line.productName + ': no POS ID'); continue; }
+      try {
+        const { data: existing, error: fetchErr } = await sb.from('warehouse_stock').select('*').eq('product_id', line.posProductId);
+        if (fetchErr) throw new Error(fetchErr.message);
+        if (existing && existing.length > 0) {
+          const newQty = (parseFloat(existing[0].quantity)||0) + line.totalCases;
+          const { error: updErr } = await sb.from('warehouse_stock').update({ quantity: newQty, last_updated: new Date().toISOString() }).eq('product_id', line.posProductId);
+          if (updErr) throw new Error(updErr.message);
+        } else {
+          const { error: insErr } = await sb.from('warehouse_stock').insert({ product_id: line.posProductId, quantity: line.totalCases, last_updated: new Date().toISOString() });
+          if (insErr) throw new Error(insErr.message);
+        }
+        // Update products.stock_quantity too
+        const { data: prodRow } = await sb.from('products').select('stock_quantity').eq('product_id', line.posProductId).single();
+        if (prodRow) await sb.from('products').update({ stock_quantity: (parseFloat(prodRow.stock_quantity)||0) + line.totalCases }).eq('product_id', line.posProductId);
+        successCount++;
+      } catch(e) { errorMsgs.push(line.productName + ': ' + e.message); }
+    }
+
+    closeModal('modal-purchase-order');
+
+    if (errorMsgs.length) {
+      alert('⚠️ Purchase saved but some warehouse updates failed:\n\n' + errorMsgs.join('\n'));
+    } else {
+      showToast('✅ Purchase saved! ' + successCount + ' product(s) added to warehouse');
+    }
+
+    // Refresh warehouse data from Supabase so Products page shows updated stock
+    try {
+      const { data: freshWH } = await sb.from('warehouse_stock').select('*');
+      if (freshWH) posData.warehouse_stock = freshWH;
+      const { data: freshTruck } = await sb.from('inventory').select('*');
+      if (freshTruck) posData.inventory = freshTruck;
+    } catch(e) { console.warn('Warehouse refresh failed:', e); }
+
+    loadPurchaseOrders();
+
+  } finally {
+    _poSaving = false;
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '💾 Save & Update Warehouse'; }
+  }
 }
 
 function printPurchaseInvoice() {
@@ -2196,6 +2243,32 @@ function deletePO(id) {
   if (!confirm('Delete this purchase?')) return;
   lsSet('fin_purchase_orders', lsGet('fin_purchase_orders').filter(function(o){return o.id!==id;}));
   loadPurchaseOrders();
+}
+
+// Remove duplicate purchase orders (same invoice_ref + date, or same id)
+function cleanDuplicatePurchases() {
+  const all = lsGet('fin_purchase_orders');
+  const seenIds = new Set();
+  const seenRefs = new Set();
+  const clean = [];
+  // Sort newest first so we keep the latest save
+  const sorted = [...all].sort((a,b) => b.id.localeCompare(a.id));
+  sorted.forEach(o => {
+    // Deduplicate by id
+    if (seenIds.has(o.id)) return;
+    seenIds.add(o.id);
+    // Deduplicate by invoice_ref + date (keep first/latest)
+    if (o.invoice_ref && o.invoice_ref.trim()) {
+      const refKey = o.invoice_ref.trim().toLowerCase() + '|' + o.date;
+      if (seenRefs.has(refKey)) return;
+      seenRefs.add(refKey);
+    }
+    clean.push(o);
+  });
+  const removed = all.length - clean.length;
+  lsSet('fin_purchase_orders', clean);
+  loadPurchaseOrders();
+  showToast(removed > 0 ? ('🧹 Removed ' + removed + ' duplicate purchase(s)!') : '✅ No duplicates found.');
 }
 
 // Repair old broken purchases (reapply warehouse stock using correct pos_id from fin_products)
