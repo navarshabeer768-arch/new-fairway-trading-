@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+]<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -145,7 +145,6 @@ tr:hover td{background:#f8f9ff;}
     <div id="fin-pin-error" style="color:#ff8a80;font-size:12px;text-align:center;margin-bottom:12px;min-height:16px;"></div>
     <button onclick="submitFinPin()" style="width:100%;background:#f9a825;color:#1a237e;border:none;padding:14px;border-radius:10px;font-size:15px;font-weight:900;cursor:pointer;">🔓 UNLOCK</button>
   </div>
-  <div style="margin-top:20px;color:rgba(255,255,255,.5);font-size:12px;">Default PIN: 1234</div>
 </div>
 
 <!-- SIDEBAR -->
@@ -1152,6 +1151,17 @@ const LS = {
 function lsGet(key) { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } }
 function lsSet(key, data) { localStorage.setItem(key, JSON.stringify(data)); }
 
+function showToast(msg, duration) {
+  const existing = document.getElementById('fin-toast');
+  if (existing) existing.remove();
+  const t = document.createElement('div');
+  t.id = 'fin-toast';
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1a237e;color:#fff;padding:12px 20px;border-radius:8px;font-size:13px;font-weight:700;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,.3);transition:opacity .3s;max-width:360px;';
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, duration || 3000);
+}
+
 // Helper: get all purchases from fin_purchase_orders in a normalized flat format
 // Maps each ORDER (which may have multiple lines) into a single purchase record
 function getPurchaseOrders() {
@@ -1214,38 +1224,45 @@ async function syncData() {
       warehouse_qty: whMap[p.product_id] || 0,
       truck_qty: truckStockMap[p.product_id] || 0
     }));
-    // ── Rebuild fin_products cleanly from POS — no duplicates ever ──
-    // Strategy: POS Supabase is the source of truth for product_id.
-    // We keep fin_products as a 1-to-1 map keyed by pos_id (product_id from Supabase).
+    // ── Rebuild fin_products — only if Supabase has products ──
+    // If Supabase products is empty (user deleted POS data), keep existing fin_products
     const oldFinProds = lsGet('fin_products');
-    // Build lookup of existing fin customisations by pos_id AND by name (for broken records)
-    const finCustomByPosId = {};
-    const finCustomByName = {};
-    oldFinProds.forEach(fp => {
-      const pid = parseInt(fp.pos_id);
-      const validPosId = pid && pid <= 2147483647;
-      if (validPosId) finCustomByPosId[pid] = fp;
-      else finCustomByName[fp.name.toLowerCase().trim()] = fp;
-    });
-    // Rebuild from POS products — one entry per product, no duplicates
-    const rebuiltFinProds = posData.products.map(p => {
-      const existing = finCustomByPosId[p.product_id] || finCustomByName[p.name.toLowerCase().trim()] || {};
-      return {
-        id: 'pos-' + p.product_id,
-        pos_id: p.product_id,
-        name: p.name,
-        category: existing.category || p.category || '',
-        sell_price: existing.sell_price || p.selling_price || 0,
-        cost_price: existing.cost_price || p.cost_price || 0,
-        cases_per_box: existing.cases_per_box || p.cases_per_box || 4,
-        unit: existing.unit || p.unit || '',
-        barcode: existing.barcode || p.barcode || '',
-        icon: existing.icon || p.icon || '📦',
-        notes: existing.notes || ''
-      };
-    });
-    lsSet('fin_products', rebuiltFinProds);
-    document.getElementById('sync-status').textContent = '✅ Synced: ' + new Date().toLocaleTimeString();
+    if (posData.products.length > 0) {
+      const finCustomByPosId = {};
+      const finCustomByName = {};
+      oldFinProds.forEach(fp => {
+        const pid = parseInt(fp.pos_id);
+        const validPosId = pid && pid <= 2147483647;
+        if (validPosId) finCustomByPosId[pid] = fp;
+        else finCustomByName[fp.name.toLowerCase().trim()] = fp;
+      });
+      const rebuiltFinProds = posData.products.map(p => {
+        const existing = finCustomByPosId[p.product_id] || finCustomByName[p.name.toLowerCase().trim()] || {};
+        return {
+          id: 'pos-' + p.product_id,
+          pos_id: p.product_id,
+          name: p.name,
+          category: existing.category || p.category || '',
+          sell_price: existing.sell_price || p.selling_price || 0,
+          cost_price: existing.cost_price || p.cost_price || 0,
+          cases_per_box: existing.cases_per_box || p.cases_per_box || 4,
+          unit: existing.unit || p.unit || '',
+          barcode: existing.barcode || p.barcode || '',
+          icon: existing.icon || p.icon || '📦',
+          notes: existing.notes || ''
+        };
+      });
+      lsSet('fin_products', rebuiltFinProds);
+    }
+    // Show sync status with data counts
+    const prodCount = posData.products.length;
+    const invCount = posData.invoices.length;
+    const custCount = posData.customers.length;
+    if (prodCount === 0 && invCount === 0) {
+      document.getElementById('sync-status').textContent = '⚠️ POS has no data — add products in POS first';
+    } else {
+      document.getElementById('sync-status').textContent = `✅ Synced ${new Date().toLocaleTimeString()} · ${prodCount} products · ${invCount} invoices · ${custCount} customers`;
+    }
     // Always reload the active page after sync so data appears
     const activePage = document.querySelector('.page.active');
     if (activePage) loadCurrentPage(activePage.id.replace('page-', ''));
@@ -1361,13 +1378,26 @@ function loadDashboard() {
   const invs = posData.invoices.filter(i => i.date >= from && i.date <= to);
   const revenue = invs.reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
   const creditTotal = posData.customers.reduce((a, c) => a + (c.credit_balance || 0), 0);
-  // Expenses from finance + POS expenses
   const finExp = lsGet(LS.transactions).filter(t => t.type === 'expense' && t.date >= from && t.date <= to).reduce((a, t) => a + t.amount, 0);
   const posExp = posData.expenses.filter(e => e.date >= from && e.date <= to).reduce((a, e) => a + (e.amount || 0), 0);
   const salaries = lsGet(LS.payroll).filter(p => p.month >= from.slice(0, 7)).reduce((a, p) => a + p.net_pay, 0);
   const purchases = getPurchaseOrders().filter(p => p.date >= from && p.date <= to).reduce((a, p) => a + p.amount, 0);
   const totalExp = finExp + posExp + salaries + purchases;
   const profit = revenue - totalExp;
+
+  // Show warning if POS has no data
+  const posWarning = document.getElementById('pos-data-warning');
+  if (posData.invoices.length === 0 && posData.products.length === 0) {
+    if (!posWarning) {
+      const warn = document.createElement('div');
+      warn.id = 'pos-data-warning';
+      warn.style.cssText = 'background:#fff8e1;border:1px solid #f57f17;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:#7f4000;font-weight:600;';
+      warn.innerHTML = '⚠️ POS data is empty — Sales & customer data shows QR 0. Finance data (purchases, salaries, expenses) is still intact. <strong>Add products in POS app to restore sales tracking.</strong>';
+      document.getElementById('page-dashboard').insertBefore(warn, document.getElementById('page-dashboard').firstChild);
+    }
+  } else if (posWarning) {
+    posWarning.remove();
+  }
 
   document.getElementById('d-revenue').textContent = fmt(revenue);
   document.getElementById('d-revenue-sub').textContent = `${invs.length} invoices`;
