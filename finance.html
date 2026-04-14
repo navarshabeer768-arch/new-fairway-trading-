@@ -161,6 +161,8 @@ tr:hover td{background:#f8f9ff;}
     <div class="nav-section">Financial</div>
     <div class="nav-item" onclick="showPage('pl')"><span class="icon">📈</span> Profit & Loss</div>
     <div class="nav-item" onclick="showPage('balance')"><span class="icon">⚖️</span> Balance Sheet</div>
+    <div class="nav-item" onclick="showPage('trial')"><span class="icon">📋</span> Trial Balance</div>
+    <div class="nav-item" onclick="showPage('stock')"><span class="icon">📦</span> Stock Report</div>
     <div class="nav-item" onclick="showPage('income')"><span class="icon">💵</span> Income & Expenses</div>
     <div class="nav-section">Assets & Liabilities</div>
     <div class="nav-item" onclick="showPage('assets')"><span class="icon">🏗️</span> Fixed Assets</div>
@@ -176,6 +178,7 @@ tr:hover td{background:#f8f9ff;}
     <div class="nav-section">Customers</div>
     <div class="nav-item" onclick="showPage('ledger')"><span class="icon">📋</span> Customer Ledger</div>
     <div class="nav-item" onclick="showPage('aging')"><span class="icon">⏰</span> Aging Report</div>
+    <div class="nav-item" onclick="showPage('accounts')"><span class="icon">📒</span> Chart of Accounts</div>
   </nav>
   <div class="sidebar-footer">
     Connected to POS App<br>Auto-syncs sales data<br>
@@ -466,9 +469,19 @@ tr:hover td{background:#f8f9ff;}
       <div class="card" id="purchase-order-card">
         <div class="card-header">
           <div class="card-title">Purchase Orders from Alaa (Oman)</div>
-          <div style="display:flex;gap:8px;">
-            <input type="date" class="form-input" id="pur-from" style="width:140px;">
-            <input type="date" class="form-input" id="pur-to" style="width:140px;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <select class="form-select" id="pur-date-preset" style="width:130px;" onchange="applyPurDatePreset()">
+              <option value="all">📅 All Dates</option>
+              <option value="month" selected>This Month</option>
+              <option value="lastmonth">Last Month</option>
+              <option value="quarter">This Quarter</option>
+              <option value="year">This Year</option>
+              <option value="custom">Custom Range</option>
+            </select>
+            <div id="pur-custom-range" style="display:none;gap:8px;display:none;">
+              <input type="date" class="form-input" id="pur-from" style="width:130px;">
+              <input type="date" class="form-input" id="pur-to" style="width:130px;">
+            </div>
             <button class="btn btn-outline btn-sm" onclick="loadPurchaseOrders()">Filter</button>
           </div>
         </div>
@@ -479,6 +492,35 @@ tr:hover td{background:#f8f9ff;}
           </table>
         </div>
       </div>
+    </div>
+
+    <!-- TRIAL BALANCE -->
+    <div class="page" id="page-trial">
+      <div class="filters">
+        <div class="filter-group"><span class="filter-label">As of Date:</span><input type="date" class="form-input" id="trial-date" style="width:150px;"></div>
+        <button class="btn btn-primary btn-sm" onclick="loadTrialBalance()">Generate</button>
+        <button class="btn btn-outline btn-sm" onclick="window.print()">🖨️ Print</button>
+      </div>
+      <div id="trial-content"><div class="loading"><div class="spinner"></div>Click Generate</div></div>
+    </div>
+
+    <!-- STOCK REPORT -->
+    <div class="page" id="page-stock">
+      <div class="filters">
+        <div class="filter-group"><span class="filter-label">As of Date:</span><input type="date" class="form-input" id="stock-date" style="width:150px;"></div>
+        <button class="btn btn-primary btn-sm" onclick="loadStockReport()">Generate</button>
+        <button class="btn btn-outline btn-sm" onclick="window.print()">🖨️ Print</button>
+      </div>
+      <div id="stock-content"><div class="loading"><div class="spinner"></div>Click Generate</div></div>
+    </div>
+
+    <!-- CHART OF ACCOUNTS -->
+    <div class="page" id="page-accounts">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div></div>
+        <button class="btn btn-primary btn-sm" onclick="openAddAccountModal()">+ New Account</button>
+      </div>
+      <div id="accounts-content"></div>
     </div>
 
     <!-- IMPORT & EXTRA COSTS -->
@@ -938,6 +980,31 @@ tr:hover td{background:#f8f9ff;}
 </div>
 
 <!-- Reset Finance Modal -->
+<div class="modal-overlay" id="modal-account">
+  <div class="modal">
+    <div class="modal-title" id="acc-modal-title">New Account</div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Account Name</label><input type="text" class="form-input" id="acc-name" placeholder="e.g. Cash in Hand"></div>
+      <div class="form-group"><label class="form-label">Account Code</label><input type="text" class="form-input" id="acc-code" placeholder="e.g. 1001"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Account Type</label>
+        <select class="form-select" id="acc-type">
+          <option value="asset">Asset</option>
+          <option value="liability">Liability</option>
+          <option value="equity">Equity / Capital</option>
+          <option value="income">Income / Revenue</option>
+          <option value="expense">Expense</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Opening Balance (QR)</label><input type="number" class="form-input" id="acc-opening" placeholder="0.00" value="0"></div>
+    </div>
+    <div class="form-group" style="margin-bottom:16px;"><label class="form-label">Description</label><input type="text" class="form-input" id="acc-desc" placeholder="Optional description"></div>
+    <div class="modal-footer"><button class="btn btn-outline" onclick="closeModal('modal-account')">Cancel</button><button class="btn btn-primary" onclick="saveAccount()">Save Account</button></div>
+  </div>
+</div>
+
+<!-- Reset Finance Modal -->
 <div class="modal-overlay" id="reset-finance-modal">
   <div class="modal">
     <div class="modal-title" style="color:#c62828;">⚠️ Reset All Finance Data</div>
@@ -1203,6 +1270,9 @@ function loadCurrentPage(page) {
   else if (page === 'purchases') loadPurchaseOrders();
   else if (page === 'importcosts') loadImportCosts();
   else if (page === 'cogs') loadCOGS();
+  else if (page === 'trial') loadTrialBalance();
+  else if (page === 'stock') loadStockReport();
+  else if (page === 'accounts') loadAccounts();
   else if (page === 'assets') loadAssets();
   else if (page === 'liabilities') loadPayables();
   else if (page === 'bank') loadBank();
@@ -1217,6 +1287,8 @@ const pageTitles = {
   dashboard: ['Dashboard', 'Financial Overview'],
   pl: ['Profit & Loss', 'Income statement for period'],
   balance: ['Balance Sheet', 'Assets, liabilities and equity'],
+  trial: ['Trial Balance', 'Debit and credit summary of all accounts'],
+  stock: ['Stock Report', 'Opening stock, closing stock and movement'],
   income: ['Income & Expenses', 'All transactions'],
   purchases: ['Purchases from Alaa', 'Track all purchases from Oman supplier'],
   products: ['Products', 'Manage your product catalogue'],
@@ -1229,6 +1301,7 @@ const pageTitles = {
   bank: ['Bank Reconciliation', 'Track cash flow'],
   ledger: ['Customer Ledger', 'Customer account statements'],
   aging: ['Aging Report', 'Outstanding receivables analysis'],
+  accounts: ['Chart of Accounts', 'All ledger accounts and opening balances'],
 };
 
 function showPage(page) {
@@ -1492,49 +1565,111 @@ function loadPL() {
 // ═══════════════════════════════════════════
 function loadBalanceSheet() {
   const asOf = document.getElementById('bs-date').value || today();
-  const invs = posData.invoices.filter(i => i.date <= asOf);
-  const totalRevenue = invs.reduce((a, i) => a + (i.total_amount || 0), 0);
-  const totalCredit = posData.customers.reduce((a, c) => a + (c.credit_balance || 0), 0);
-  const cashSales = invs.filter(i => i.payment_type === 'cash' || i.payment_type === 'cheque').reduce((a, i) => a + (i.total_amount || 0), 0);
-  const totalPurchases = getPurchaseOrders().filter(p => p.date <= asOf).reduce((a, p) => a + p.amount, 0);
-  const totalSalaries = lsGet(LS.payroll).reduce((a, p) => a + p.net_pay, 0);
-  const totalExp = lsGet(LS.transactions).filter(t => t.type === 'expense' && t.date <= asOf).reduce((a, t) => a + t.amount, 0);
-  const bankIn = lsGet(LS.bank).filter(b => b.type === 'in' && b.date <= asOf).reduce((a, b) => a + b.amount, 0);
-  const bankOut = lsGet(LS.bank).filter(b => b.type === 'out' && b.date <= asOf).reduce((a, b) => a + b.amount, 0);
-  const cashBalance = cashSales + bankIn - bankOut - totalPurchases - totalSalaries - totalExp;
-  const totalAssets = cashBalance + totalCredit;
-  const totalLiabilities = getPurchaseOrders().filter(p => p.status === 'pending').reduce((a, p) => a + p.amount, 0);
-  const equity = totalAssets - totalLiabilities;
 
-  const assets = lsGet('fin_assets').filter(a => a.status === 'active');
-  const totalFixedAssets = assets.reduce((a, ast) => a + calcCurrentValue(ast), 0);
-  const drawings = lsGet('fin_drawings').reduce((a, d) => a + d.amount, 0);
+  // ── ASSETS ──
+  // Cash calculation: cash sales + bank deposits - cash payments - purchases - salaries - expenses
+  const invs = posData.invoices.filter(i => i.date <= asOf);
+  const cashSales = invs.filter(i => i.payment_type === 'cash').reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
+  const chequeSales = invs.filter(i => i.payment_type === 'cheque').reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
+  const bankIn = lsGet(LS.bank).filter(b => b.type==='in' && b.date<=asOf).reduce((a,b) => a+b.amount, 0);
+  const bankOut = lsGet(LS.bank).filter(b => b.type==='out' && b.date<=asOf).reduce((a,b) => a+b.amount, 0);
+  const totalPurchasesPaid = getPurchaseOrders().filter(p => p.status==='paid' && p.date<=asOf).reduce((a,p) => a+p.amount, 0);
+  const totalSalaries = lsGet(LS.payroll).reduce((a,p) => a+p.net_pay, 0);
+  const totalExp = lsGet(LS.transactions).filter(t => t.type==='expense' && t.date<=asOf).reduce((a,t) => a+t.amount, 0);
+  const posExp = posData.expenses.filter(e => e.date<=asOf).reduce((a,e) => a+parseFloat(e.amount||0), 0);
+  const drawings = lsGet('fin_drawings').reduce((a,d) => a+d.amount, 0);
+  const cashAtHand = Math.max(0, cashSales - totalPurchasesPaid - totalSalaries - totalExp - posExp - drawings);
+  const bankBalance = Math.max(0, chequeSales + bankIn - bankOut);
+
+  // Accounts receivable = total credit balances owed by customers
+  const accountsReceivable = posData.customers.reduce((a,c) => a+parseFloat(c.credit_balance||0), 0);
+
+  // Inventory = current warehouse + truck value
+  const finProds = lsGet('fin_products');
+  const whMap = {}; posData.warehouse_stock.forEach(w => whMap[w.product_id] = w.quantity||0);
+  const trMap = {}; posData.inventory.forEach(t => trMap[t.product_id] = (trMap[t.product_id]||0) + (t.quantity||0));
+  let inventoryValue = 0;
+  finProds.forEach(p => {
+    const cpb = p.cases_per_box||4;
+    const costPerBag = (p.cost_price||0)/cpb;
+    const whBags = whMap[p.pos_id]||0;
+    const trBags = trMap[p.pos_id]||0;
+    inventoryValue += (whBags + trBags) * costPerBag;
+  });
+
+  // Fixed assets (net book value after depreciation)
+  const fixedAssets = lsGet('fin_assets').filter(a => a.status==='active');
+  const totalFixedAssets = fixedAssets.reduce((a,ast) => a + calcCurrentValue(ast), 0);
+  const importCostsPaid = lsGet('fin_import_costs').filter(c => c.date<=asOf).reduce((a,c) => a+c.amount, 0);
+
+  // Custom accounts from Chart of Accounts
+  const chartAccounts = lsGet('fin_chart_accounts');
+  const extraAssets = chartAccounts.filter(a => a.type==='asset').reduce((a,x) => a+parseFloat(x.opening_balance||0), 0);
+
+  const totalCurrentAssets = cashAtHand + bankBalance + accountsReceivable + inventoryValue;
+  const totalAssets = totalCurrentAssets + totalFixedAssets + extraAssets;
+
+  // ── LIABILITIES ──
+  const accountsPayable = getPurchaseOrders().filter(p => (p.status==='pending'||p.status==='partial') && p.date<=asOf).reduce((a,p) => a+p.amount, 0);
+  const accruedSalaries = lsGet(LS.payroll).filter(p => !p.paid).reduce((a,p) => a+p.net_pay, 0);
+  const extraLiabilities = chartAccounts.filter(a => a.type==='liability').reduce((a,x) => a+parseFloat(x.opening_balance||0), 0);
+  const totalLiabilities = accountsPayable + accruedSalaries + extraLiabilities;
+
+  // ── EQUITY ──
+  const totalRevenue = invs.reduce((a,i) => a+parseFloat(i.total_amount||0), 0);
+  const totalCOGS = getPurchaseOrders().filter(p => p.date<=asOf).reduce((a,p) => a+p.amount, 0) + importCostsPaid;
+  const totalAllExp = totalSalaries + totalExp + posExp;
+  const retainedEarnings = totalRevenue - totalCOGS - totalAllExp - drawings;
+  const ownerCapital = chartAccounts.filter(a => a.type==='equity').reduce((a,x) => a+parseFloat(x.opening_balance||0), 0);
+  const totalEquity = ownerCapital + retainedEarnings;
+  const totalLiabEquity = totalLiabilities + totalEquity;
+  const difference = Math.abs(totalAssets - totalLiabEquity);
 
   document.getElementById('bs-content').innerHTML = `
+    <div style="margin-bottom:12px;padding:10px 14px;border-radius:8px;background:${difference<1?'#e8f5e9':'#fff8e1'};font-size:13px;font-weight:700;color:${difference<1?'var(--green)':'var(--gold)'};">
+      ${difference<1 ? '✅ Balance Sheet is balanced' : '⚠️ Difference of '+fmt(difference)+' — may need manual account entries'}
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+      <!-- ASSETS -->
       <div class="card">
-        <div class="card-header"><div class="card-title" style="color:var(--green);">ASSETS</div></div>
+        <div class="card-header" style="background:#f0fff4;"><div class="card-title" style="color:var(--green);">ASSETS</div><div style="font-weight:900;color:var(--green);">${fmt(totalAssets)}</div></div>
         <div style="padding:20px;">
-          <table style="font-size:13px;">
-            <tr><td colspan="2" style="font-weight:700;color:var(--text2);padding-bottom:8px;">Current Assets</td></tr>
-            <tr><td style="padding:6px 0;">Cash & Bank</td><td style="text-align:right;">${fmt(cashBalance)}</td></tr>
-            <tr><td style="padding:6px 0;">Accounts Receivable (Credit)</td><td style="text-align:right;">${fmt(totalCredit)}</td></tr>
-            <tr><td colspan="2" style="font-weight:700;color:var(--text2);padding:12px 0 8px;">Fixed Assets</td></tr>
-            ${assets.map(a => `<tr><td style="padding:4px 0;">${ASSET_ICONS[a.category]||'📦'} ${a.name}</td><td style="text-align:right;">${fmt(calcCurrentValue(a))}</td></tr>`).join('')}
-            <tr style="font-weight:800;border-top:2px solid var(--green);"><td style="padding:10px 0;">TOTAL ASSETS</td><td style="text-align:right;color:var(--green);">${fmt(totalAssets + totalFixedAssets)}</td></tr>
+          <table style="font-size:13px;width:100%;">
+            <tr><td colspan="2" style="font-weight:800;color:var(--navy);padding:8px 0;border-bottom:1px solid var(--border);">Current Assets</td></tr>
+            <tr><td style="padding:6px 0;">Cash in Hand</td><td style="text-align:right;">${fmt(cashAtHand)}</td></tr>
+            <tr><td style="padding:6px 0;">Cash at Bank</td><td style="text-align:right;">${fmt(bankBalance)}</td></tr>
+            <tr><td style="padding:6px 0;">Accounts Receivable (Debtors)</td><td style="text-align:right;">${fmt(accountsReceivable)}</td></tr>
+            <tr><td style="padding:6px 0;">Inventory / Stock</td><td style="text-align:right;">${fmt(inventoryValue)}</td></tr>
+            <tr style="font-weight:700;background:#f0fff4;"><td style="padding:6px 0;">Total Current Assets</td><td style="text-align:right;color:var(--green);">${fmt(totalCurrentAssets)}</td></tr>
+            <tr><td colspan="2" style="font-weight:800;color:var(--navy);padding:8px 0;border-bottom:1px solid var(--border);">Fixed Assets (Net Book Value)</td></tr>
+            ${fixedAssets.length ? fixedAssets.map(a => `<tr><td style="padding:4px 0 4px 12px;">${ASSET_ICONS[a.category]||'📦'} ${a.name}</td><td style="text-align:right;">${fmt(calcCurrentValue(a))}</td></tr>`).join('') : '<tr><td colspan="2" style="color:#999;padding:6px 0;">No fixed assets</td></tr>'}
+            <tr style="font-weight:700;background:#f0fff4;"><td style="padding:6px 0;">Total Fixed Assets</td><td style="text-align:right;color:var(--green);">${fmt(totalFixedAssets)}</td></tr>
+            ${extraAssets > 0 ? `<tr><td colspan="2" style="font-weight:800;color:var(--navy);padding:8px 0;border-bottom:1px solid var(--border);">Other Assets</td></tr>
+            ${chartAccounts.filter(a=>a.type==='asset'&&a.opening_balance>0).map(a=>`<tr><td style="padding:4px 0;">${a.name}</td><td style="text-align:right;">${fmt(a.opening_balance)}</td></tr>`).join('')}` : ''}
+            <tr style="font-weight:900;font-size:14px;border-top:2px solid var(--green);background:#e8f5e9;"><td style="padding:10px 0;">TOTAL ASSETS</td><td style="text-align:right;color:var(--green);">${fmt(totalAssets)}</td></tr>
           </table>
         </div>
       </div>
+      <!-- LIABILITIES & EQUITY -->
       <div class="card">
-        <div class="card-header"><div class="card-title" style="color:var(--red);">LIABILITIES & EQUITY</div></div>
+        <div class="card-header" style="background:#fff5f5;"><div class="card-title" style="color:var(--red);">LIABILITIES & EQUITY</div><div style="font-weight:900;color:var(--navy);">${fmt(totalLiabEquity)}</div></div>
         <div style="padding:20px;">
-          <table style="font-size:13px;">
-            <tr><td colspan="2" style="font-weight:700;color:var(--text2);padding-bottom:8px;">Current Liabilities</td></tr>
-            <tr><td style="padding:6px 0;">Accounts Payable (Suppliers)</td><td style="text-align:right;">${fmt(totalLiabilities)}</td></tr>
-            <tr><td colspan="2" style="font-weight:700;color:var(--text2);padding:12px 0 8px;">Equity</td></tr>
-            <tr><td style="padding:6px 0;">Owner's Equity</td><td style="text-align:right;">${fmt(equity + totalFixedAssets)}</td></tr>
+          <table style="font-size:13px;width:100%;">
+            <tr><td colspan="2" style="font-weight:800;color:var(--red);padding:8px 0;border-bottom:1px solid var(--border);">Current Liabilities</td></tr>
+            <tr><td style="padding:6px 0;">Accounts Payable (Suppliers)</td><td style="text-align:right;">${fmt(accountsPayable)}</td></tr>
+            <tr><td style="padding:6px 0;">Accrued Salaries</td><td style="text-align:right;">${fmt(accruedSalaries)}</td></tr>
+            ${chartAccounts.filter(a=>a.type==='liability'&&a.opening_balance>0).map(a=>`<tr><td style="padding:4px 0;">${a.name}</td><td style="text-align:right;">${fmt(a.opening_balance)}</td></tr>`).join('')}
+            <tr style="font-weight:700;background:#fff5f5;"><td style="padding:6px 0;">Total Liabilities</td><td style="text-align:right;color:var(--red);">${fmt(totalLiabilities)}</td></tr>
+            <tr><td colspan="2" style="font-weight:800;color:var(--navy);padding:8px 0;border-bottom:1px solid var(--border);">Equity / Capital</td></tr>
+            <tr><td style="padding:6px 0;">Owner Capital</td><td style="text-align:right;">${fmt(ownerCapital)}</td></tr>
+            <tr><td style="padding:6px 0;">Retained Earnings / Net Profit</td><td style="text-align:right;color:${retainedEarnings>=0?'var(--green)':'var(--red)'};">${fmt(retainedEarnings)}</td></tr>
+            <tr><td style="padding:6px 0;">Revenue (Period)</td><td style="text-align:right;">${fmt(totalRevenue)}</td></tr>
+            <tr><td style="padding:6px 0;color:var(--red);">Less: COGS</td><td style="text-align:right;color:var(--red);">- ${fmt(totalCOGS)}</td></tr>
+            <tr><td style="padding:6px 0;color:var(--red);">Less: Operating Expenses</td><td style="text-align:right;color:var(--red);">- ${fmt(totalAllExp)}</td></tr>
             <tr><td style="padding:6px 0;color:var(--gold);">Less: Owner Drawings</td><td style="text-align:right;color:var(--gold);">- ${fmt(drawings)}</td></tr>
-            <tr style="font-weight:800;border-top:2px solid var(--red);"><td style="padding:10px 0;">TOTAL LIABILITIES + EQUITY</td><td style="text-align:right;color:var(--navy);">${fmt(totalAssets + totalFixedAssets)}</td></tr>
+            ${chartAccounts.filter(a=>a.type==='equity'&&a.opening_balance>0).map(a=>`<tr><td style="padding:4px 0;">${a.name}</td><td style="text-align:right;">${fmt(a.opening_balance)}</td></tr>`).join('')}
+            <tr style="font-weight:700;background:#f0fff4;"><td style="padding:6px 0;">Total Equity</td><td style="text-align:right;color:var(--green);">${fmt(totalEquity)}</td></tr>
+            <tr style="font-weight:900;font-size:14px;border-top:2px solid var(--red);background:#fff0f0;"><td style="padding:10px 0;">TOTAL LIABILITIES + EQUITY</td><td style="text-align:right;color:var(--navy);">${fmt(totalLiabEquity)}</td></tr>
           </table>
         </div>
       </div>
@@ -2530,7 +2665,7 @@ function loadCOGS() {
   const to = document.getElementById('cogs-to').value || today();
   const invs = posData.invoices.filter(i => i.date >= from && i.date <= to);
   const revenue = invs.reduce((a,i) => a+(i.total_amount||0), 0);
-  const purchaseCost = lsGet('fin_purchase_orders').filter(o => o.date>=from && o.date<=to).reduce((a,o)=>a+o.total,0);
+  const purchaseCost = lsGet('fin_purchase_orders').filter(o => o.date>=from && o.date<=to).reduce((a,o)=>a+(o.grand_total||o.total||0),0);
   const importCosts = lsGet('fin_import_costs').filter(c => c.date>=from && c.date<=to).reduce((a,c)=>a+c.amount,0);
   const costsByCategory = {};
   lsGet('fin_import_costs').filter(c=>c.date>=from&&c.date<=to).forEach(c=>{
@@ -2794,9 +2929,322 @@ async function init() {
   document.getElementById('ic-to').value = today();
   document.getElementById('cogs-from').value = monthStart();
   document.getElementById('cogs-to').value = today();
+  document.getElementById('trial-date').value = today();
+  document.getElementById('stock-date').value = today();
   // Sync data then reload active page
   await syncData();
 }
+// ═══════════════════════════════════════════
+// PURCHASE DATE PRESET
+// ═══════════════════════════════════════════
+function applyPurDatePreset() {
+  const preset = document.getElementById('pur-date-preset').value;
+  const customDiv = document.getElementById('pur-custom-range');
+  const fromEl = document.getElementById('pur-from');
+  const toEl = document.getElementById('pur-to');
+  if (preset === 'all') {
+    if (fromEl) fromEl.value = '2000-01-01';
+    if (toEl) toEl.value = '2099-12-31';
+    if (customDiv) customDiv.style.display = 'none';
+  } else if (preset === 'custom') {
+    if (customDiv) customDiv.style.display = 'flex';
+  } else {
+    if (customDiv) customDiv.style.display = 'none';
+    const range = getDateRange(preset);
+    if (fromEl) fromEl.value = range.from;
+    if (toEl) toEl.value = range.to;
+  }
+  loadPurchaseOrders();
+}
+
+// ═══════════════════════════════════════════
+// TRIAL BALANCE
+// ═══════════════════════════════════════════
+function loadTrialBalance() {
+  const asOf = document.getElementById('trial-date').value || today();
+
+  // Collect all accounts and their balances
+  const accounts = lsGet('fin_chart_accounts');
+
+  // Auto-calculated balances from data
+  const totalRevenue = posData.invoices.filter(i => i.date <= asOf).reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
+  const totalPurchases = getPurchaseOrders().filter(p => p.date <= asOf).reduce((a,p) => a + p.amount, 0);
+  const totalImport = lsGet('fin_import_costs').filter(c => c.date <= asOf).reduce((a,c) => a + c.amount, 0);
+  const totalSalaries = lsGet(LS.payroll).reduce((a,p) => a + p.net_pay, 0);
+  const totalExpenses = lsGet(LS.transactions).filter(t => t.type==='expense' && t.date <= asOf).reduce((a,t) => a + t.amount, 0);
+  const totalPosExp = posData.expenses.filter(e => e.date <= asOf).reduce((a,e) => a + parseFloat(e.amount||0), 0);
+  const totalAssets = lsGet('fin_assets').filter(a => a.status==='active').reduce((a,x) => a + parseFloat(x.purchase_value||0), 0);
+  const totalReceivables = posData.customers.reduce((a,c) => a + parseFloat(c.credit_balance||0), 0);
+  const totalPayables = getPurchaseOrders().filter(p => p.status==='pending'||p.status==='partial').reduce((a,p) => a + p.amount, 0);
+  const capitalAccounts = accounts.filter(a => a.type === 'equity');
+  const totalCapital = capitalAccounts.reduce((a,x) => a + parseFloat(x.opening_balance||0), 0);
+
+  // Build trial balance rows
+  const rows = [
+    { name: 'Sales Revenue', type: 'income', credit: totalRevenue, debit: 0 },
+    { name: 'Trade Receivables (Debtors)', type: 'asset', credit: 0, debit: totalReceivables },
+    { name: 'Inventory / Stock (Warehouse)', type: 'asset', credit: 0, debit: totalPurchases - totalPurchases * 0 },
+    { name: 'Fixed Assets', type: 'asset', credit: 0, debit: totalAssets },
+    { name: 'Purchases (COGS)', type: 'expense', credit: 0, debit: totalPurchases },
+    { name: 'Import & Extra Costs', type: 'expense', credit: 0, debit: totalImport },
+    { name: 'Salaries & Wages', type: 'expense', credit: 0, debit: totalSalaries },
+    { name: 'Other Expenses', type: 'expense', credit: 0, debit: totalExpenses + totalPosExp },
+    { name: 'Trade Payables (Creditors)', type: 'liability', credit: totalPayables, debit: 0 },
+    ...accounts.map(a => ({
+      name: a.name + (a.code ? ' (' + a.code + ')' : ''),
+      type: a.type,
+      debit: ['asset','expense'].includes(a.type) ? parseFloat(a.opening_balance||0) : 0,
+      credit: ['liability','equity','income'].includes(a.type) ? parseFloat(a.opening_balance||0) : 0
+    }))
+  ].filter(r => r.debit > 0 || r.credit > 0);
+
+  const totalDebit = rows.reduce((a,r) => a + r.debit, 0);
+  const totalCredit = rows.reduce((a,r) => a + r.credit, 0);
+  const typeColors = { asset:'var(--navy)', liability:'var(--red)', equity:'var(--green)', income:'var(--green)', expense:'var(--red)' };
+
+  document.getElementById('trial-content').innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Trial Balance — as of ${asOf}</div>
+        <div style="font-size:12px;color:var(--text2);">New Fair Way Trading</div>
+      </div>
+      <div class="card-body">
+        <table>
+          <thead><tr><th>Account</th><th>Type</th><th style="text-align:right;">Debit (QR)</th><th style="text-align:right;">Credit (QR)</th></tr></thead>
+          <tbody>
+            ${rows.map(r => `<tr>
+              <td style="font-weight:600;">${r.name}</td>
+              <td><span class="badge badge-blue" style="font-size:10px;text-transform:capitalize;">${r.type}</span></td>
+              <td style="text-align:right;font-weight:600;">${r.debit > 0 ? fmt(r.debit) : '—'}</td>
+              <td style="text-align:right;font-weight:600;">${r.credit > 0 ? fmt(r.credit) : '—'}</td>
+            </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="font-weight:900;background:${Math.abs(totalDebit-totalCredit)<0.01?'#e8f5e9':'#ffebee'};">
+              <td colspan="2" style="padding:12px;font-size:14px;">TOTALS ${Math.abs(totalDebit-totalCredit)<0.01?'✅ Balanced':'⚠️ Difference: '+fmt(Math.abs(totalDebit-totalCredit))}</td>
+              <td style="text-align:right;padding:12px;font-size:14px;">${fmt(totalDebit)}</td>
+              <td style="text-align:right;padding:12px;font-size:14px;">${fmt(totalCredit)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════
+// STOCK REPORT (Opening / Closing)
+// ═══════════════════════════════════════════
+function loadStockReport() {
+  const asOf = document.getElementById('stock-date').value || today();
+  const finProds = lsGet('fin_products');
+  const whMap = {}; posData.warehouse_stock.forEach(w => whMap[w.product_id] = w.quantity||0);
+  const truckStockMap = {};
+  posData.inventory.forEach(t => truckStockMap[t.product_id] = (truckStockMap[t.product_id]||0) + (t.quantity||0));
+
+  // Calculate total purchased per product up to asOf
+  const purchasedByProduct = {};
+  lsGet('fin_purchase_orders').filter(o => o.date <= asOf).forEach(o => {
+    const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
+    lines.forEach(l => {
+      const pid = parseInt(l.posProductId);
+      if (!pid) return;
+      const cpb = parseInt(l.cpb||l.cases_per_box||4);
+      purchasedByProduct[pid] = (purchasedByProduct[pid]||0) + (l.qty||0) * cpb;
+    });
+  });
+
+  // Calculate total sold per product up to asOf
+  const soldByProduct = {};
+  posData.invoice_items.filter(it => {
+    const inv = posData.invoices.find(i => i.invoice_id === it.invoice_id);
+    return inv && inv.date <= asOf;
+  }).forEach(it => {
+    const pid = parseInt(it.product_id);
+    soldByProduct[pid] = (soldByProduct[pid]||0) + parseFloat(it.quantity||0);
+  });
+
+  let totalOpenValue = 0, totalCloseValue = 0, totalWhValue = 0;
+  const rows = finProds.map(p => {
+    const pid = p.pos_id;
+    const cpb = parseInt(p.cases_per_box||4);
+    const costPerBag = (p.cost_price||0) / cpb;
+    const purchased = purchasedByProduct[pid] || 0; // bags
+    const sold = soldByProduct[pid] || 0; // bags
+    const warehouseBags = whMap[pid] || 0;
+    const truckBags = truckStockMap[pid] || 0;
+    const closingBags = warehouseBags + truckBags;
+    const openingBags = Math.max(0, closingBags + sold - purchased); // opening = closing + sold - purchased
+    const openingBoxes = Math.floor(openingBags/cpb);
+    const closingBoxes = Math.floor(closingBags/cpb);
+    const openingValue = openingBags * costPerBag;
+    const closingValue = closingBags * costPerBag;
+    const whValue = warehouseBags * costPerBag;
+    totalOpenValue += openingValue;
+    totalCloseValue += closingValue;
+    totalWhValue += whValue;
+    return { name: p.name, cpb, openingBoxes, openingBags, openingValue,
+      purchasedBoxes: Math.floor(purchased/cpb), soldBoxes: Math.floor(sold/cpb),
+      warehouseBoxes: Math.floor(warehouseBags/cpb), truckBoxes: Math.floor(truckBags/cpb),
+      closingBoxes, closingValue, costPerBag };
+  });
+
+  document.getElementById('stock-content').innerHTML = `
+    <div class="stat-grid" style="margin-bottom:20px;">
+      <div class="stat-card navy"><div class="stat-label">📦 Opening Stock Value</div><div class="stat-val navy">${fmt(totalOpenValue)}</div></div>
+      <div class="stat-card green"><div class="stat-label">🏭 Warehouse Value</div><div class="stat-val green">${fmt(totalWhValue)}</div></div>
+      <div class="stat-card gold"><div class="stat-label">📊 Closing Stock Value</div><div class="stat-val gold">${fmt(totalCloseValue)}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">Stock Movement Report — as of ${asOf}</div></div>
+      <div class="card-body">
+        <table>
+          <thead><tr>
+            <th>Product</th>
+            <th style="text-align:center;">Opening</th>
+            <th style="text-align:center;">Purchased</th>
+            <th style="text-align:center;">Sold</th>
+            <th style="text-align:center;">Warehouse</th>
+            <th style="text-align:center;">Truck</th>
+            <th style="text-align:center;">Closing</th>
+            <th style="text-align:right;">Closing Value</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `<tr>
+              <td><strong>${r.name}</strong><div style="font-size:11px;color:var(--text2);">${r.cpb} bags/box · QR ${r.costPerBag.toFixed(2)}/bag</div></td>
+              <td style="text-align:center;">${r.openingBoxes} boxes</td>
+              <td style="text-align:center;color:var(--green);">+${r.purchasedBoxes} boxes</td>
+              <td style="text-align:center;color:var(--red);">-${r.soldBoxes} boxes</td>
+              <td style="text-align:center;font-weight:700;color:var(--navy);">${r.warehouseBoxes} boxes</td>
+              <td style="text-align:center;font-weight:700;">${r.truckBoxes} boxes</td>
+              <td style="text-align:center;font-weight:800;color:var(--gold);">${r.closingBoxes} boxes</td>
+              <td style="text-align:right;font-weight:700;">${fmt(r.closingValue)}</td>
+            </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="font-weight:900;background:#f8f9ff;">
+              <td colspan="7" style="padding:10px;">TOTAL CLOSING STOCK VALUE</td>
+              <td style="text-align:right;padding:10px;color:var(--navy);">${fmt(totalCloseValue)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════
+// CHART OF ACCOUNTS
+// ═══════════════════════════════════════════
+const DEFAULT_ACCOUNTS = [
+  { id:'acc-1', code:'1001', name:'Cash in Hand', type:'asset', opening_balance:0, desc:'Physical cash' },
+  { id:'acc-2', code:'1002', name:'Cash at Bank', type:'asset', opening_balance:0, desc:'Bank account balance' },
+  { id:'acc-3', code:'1100', name:'Trade Receivables', type:'asset', opening_balance:0, desc:'Amounts owed by customers' },
+  { id:'acc-4', code:'1200', name:'Inventory / Stock', type:'asset', opening_balance:0, desc:'Goods in warehouse and truck' },
+  { id:'acc-5', code:'1500', name:'Fixed Assets', type:'asset', opening_balance:0, desc:'Vehicles, equipment' },
+  { id:'acc-6', code:'2001', name:'Trade Payables', type:'liability', opening_balance:0, desc:'Amounts owed to suppliers' },
+  { id:'acc-7', code:'2100', name:'VAT Payable', type:'liability', opening_balance:0, desc:'VAT collected from customers' },
+  { id:'acc-8', code:'2200', name:'Accrued Expenses', type:'liability', opening_balance:0, desc:'Expenses incurred but not paid' },
+  { id:'acc-9', code:'3001', name:'Owner Capital', type:'equity', opening_balance:0, desc:'Owner investment in business' },
+  { id:'acc-10', code:'3100', name:'Retained Earnings', type:'equity', opening_balance:0, desc:'Accumulated profits' },
+  { id:'acc-11', code:'4001', name:'Sales Revenue', type:'income', opening_balance:0, desc:'Revenue from product sales' },
+  { id:'acc-12', code:'5001', name:'Cost of Goods Sold', type:'expense', opening_balance:0, desc:'Direct cost of products sold' },
+  { id:'acc-13', code:'5100', name:'Salaries & Wages', type:'expense', opening_balance:0, desc:'Employee salary costs' },
+  { id:'acc-14', code:'5200', name:'Rent & Utilities', type:'expense', opening_balance:0, desc:'Warehouse and office rent' },
+  { id:'acc-15', code:'5300', name:'Transport & Fuel', type:'expense', opening_balance:0, desc:'Vehicle and delivery costs' },
+  { id:'acc-16', code:'5400', name:'Import Duties & Customs', type:'expense', opening_balance:0, desc:'Qatar customs and import fees' },
+];
+
+function loadAccounts() {
+  let accounts = lsGet('fin_chart_accounts');
+  if (!accounts.length) {
+    accounts = DEFAULT_ACCOUNTS;
+    lsSet('fin_chart_accounts', accounts);
+  }
+  const groups = { asset:'Assets', liability:'Liabilities', equity:'Equity / Capital', income:'Income', expense:'Expenses' };
+  const colors = { asset:'navy', liability:'red', equity:'green', income:'green', expense:'red' };
+  let html = '';
+  Object.entries(groups).forEach(([type, label]) => {
+    const typeAccounts = accounts.filter(a => a.type === type);
+    const total = typeAccounts.reduce((a,x) => a + parseFloat(x.opening_balance||0), 0);
+    html += `<div class="card" style="margin-bottom:16px;">
+      <div class="card-header" style="background:#f8f9ff;">
+        <div class="card-title" style="color:var(--${colors[type]});">${label}</div>
+        <div style="font-size:13px;font-weight:700;color:var(--${colors[type]});">${fmt(total)}</div>
+      </div>
+      <div class="card-body">
+        <table>
+          <thead><tr><th>Code</th><th>Account Name</th><th>Description</th><th style="text-align:right;">Balance (QR)</th><th>Action</th></tr></thead>
+          <tbody>
+            ${typeAccounts.map(a => `<tr>
+              <td style="font-weight:700;color:var(--navy);">${a.code}</td>
+              <td><strong>${a.name}</strong></td>
+              <td style="color:var(--text2);font-size:12px;">${a.desc||''}</td>
+              <td style="text-align:right;font-weight:700;">${fmt(a.opening_balance||0)}</td>
+              <td>
+                <button class="btn btn-outline btn-sm" onclick="editAccount('${a.id}')">✏️</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteAccount('${a.id}')">✕</button>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  });
+  document.getElementById('accounts-content').innerHTML = html;
+}
+
+function openAddAccountModal() {
+  document.getElementById('acc-modal-title').textContent = 'New Account';
+  document.getElementById('acc-modal-title').dataset.editId = '';
+  document.getElementById('acc-name').value = '';
+  document.getElementById('acc-code').value = '';
+  document.getElementById('acc-type').value = 'asset';
+  document.getElementById('acc-opening').value = '0';
+  document.getElementById('acc-desc').value = '';
+  openModal('modal-account');
+}
+
+function editAccount(id) {
+  const a = lsGet('fin_chart_accounts').find(x => x.id === id);
+  if (!a) return;
+  document.getElementById('acc-modal-title').textContent = 'Edit Account';
+  document.getElementById('acc-modal-title').dataset.editId = id;
+  document.getElementById('acc-name').value = a.name;
+  document.getElementById('acc-code').value = a.code;
+  document.getElementById('acc-type').value = a.type;
+  document.getElementById('acc-opening').value = a.opening_balance||0;
+  document.getElementById('acc-desc').value = a.desc||'';
+  openModal('modal-account');
+}
+
+function saveAccount() {
+  const editId = document.getElementById('acc-modal-title').dataset.editId;
+  const a = {
+    id: editId || 'acc-' + Date.now(),
+    code: document.getElementById('acc-code').value.trim(),
+    name: document.getElementById('acc-name').value.trim(),
+    type: document.getElementById('acc-type').value,
+    opening_balance: parseFloat(document.getElementById('acc-opening').value)||0,
+    desc: document.getElementById('acc-desc').value
+  };
+  if (!a.name) { alert('Enter account name'); return; }
+  const all = lsGet('fin_chart_accounts');
+  if (editId) {
+    const idx = all.findIndex(x => x.id === editId);
+    if (idx >= 0) all[idx] = a;
+  } else {
+    all.push(a);
+  }
+  lsSet('fin_chart_accounts', all);
+  closeModal('modal-account');
+  loadAccounts();
+}
+
+function deleteAccount(id) {
+  if (!confirm('Delete this account?')) return;
+  lsSet('fin_chart_accounts', lsGet('fin_chart_accounts').filter(a => a.id !== id));
+  loadAccounts();
+}
+
 init();
 </script>
 </body>
