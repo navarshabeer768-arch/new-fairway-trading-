@@ -468,7 +468,7 @@ tr:hover td{background:#f8f9ff;}
       </div>
       <div class="card" id="purchase-order-card">
         <div class="card-header">
-          <div class="card-title">Purchase Orders from Alaa (Oman)</div>
+          <div class="card-title">Purchase Orders from Alaa (Oman) <span id="pur-count-info" style="font-size:12px;font-weight:400;color:var(--text2);"></span></div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <select class="form-select" id="pur-date-preset" style="width:130px;" onchange="applyPurDatePreset()">
               <option value="all">📅 All Dates</option>
@@ -2233,8 +2233,9 @@ let poLines = [];
 
 function loadPurchaseOrders() {
   const orders = lsGet('fin_purchase_orders');
-  const from = document.getElementById('pur-from')?.value || '';
-  const to = document.getElementById('pur-to')?.value || '';
+  const preset = document.getElementById('pur-date-preset')?.value || 'all';
+  const from = (preset === 'all') ? '' : (document.getElementById('pur-from')?.value || '');
+  const to = (preset === 'all') ? '' : (document.getElementById('pur-to')?.value || '');
   const filtered = orders.filter(o => (!from || o.date >= from) && (!to || o.date <= to));
   const total = filtered.reduce((a,o) => a+(o.grand_total||o.total||0), 0);
   const pending = filtered.filter(o=>o.status==='pending'||o.status==='partial').reduce((a,o)=>a+(o.grand_total||o.total||0),0);
@@ -2244,6 +2245,11 @@ function loadPurchaseOrders() {
   document.getElementById('pur-pending').textContent = fmt(pending);
   document.getElementById('pur-paid').textContent = fmt(paid);
   document.getElementById('pur-units').textContent = units + ' boxes';
+  const totalAll = orders.length;
+  const filteredCount = filtered.length;
+  const countInfo = totalAll !== filteredCount ? ` (showing ${filteredCount} of ${totalAll})` : ` (${totalAll} total)`;
+  const countEl = document.getElementById('pur-count-info');
+  if (countEl) countEl.textContent = countInfo;
   document.getElementById('purchase-order-list').innerHTML = filtered.sort((a,b)=>b.date.localeCompare(a.date)).map(o => {
     const lines = o.lines || [{ productName: o.product, qty: o.qty, total_cases: o.total_cases||o.qty, price: o.unit_price||0, total: o.total||0 }];
     const grandTotal = o.grand_total || o.total || 0;
@@ -2923,8 +2929,8 @@ async function init() {
   document.getElementById('aging-date').value = today();
   document.getElementById('ledger-from').value = monthStart();
   document.getElementById('ledger-to').value = today();
-  document.getElementById('pur-from').value = monthStart();
-  document.getElementById('pur-to').value = today();
+  document.getElementById('pur-from').value = '2000-01-01';
+  document.getElementById('pur-to').value = '2099-12-31';
   document.getElementById('ic-from').value = monthStart();
   document.getElementById('ic-to').value = today();
   document.getElementById('cogs-from').value = monthStart();
