@@ -1,4 +1,4 @@
-]<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -156,28 +156,28 @@ tr:hover td{background:#f8f9ff;}
   </div>
   <nav>
     <div class="nav-section">Overview</div>
-    <div class="nav-item active" onclick="showPage('dashboard')"><span class="icon">📊</span> Dashboard</div>
+    <div class="nav-item active" onclick="showPage('dashboard', this)"><span class="icon">📊</span> Dashboard</div>
     <div class="nav-section">Financial</div>
-    <div class="nav-item" onclick="showPage('pl')"><span class="icon">📈</span> Profit & Loss</div>
-    <div class="nav-item" onclick="showPage('balance')"><span class="icon">⚖️</span> Balance Sheet</div>
-    <div class="nav-item" onclick="showPage('trial')"><span class="icon">📋</span> Trial Balance</div>
-    <div class="nav-item" onclick="showPage('stock')"><span class="icon">📦</span> Stock Report</div>
-    <div class="nav-item" onclick="showPage('income')"><span class="icon">💵</span> Income & Expenses</div>
+    <div class="nav-item" onclick="showPage('pl', this)"><span class="icon">📈</span> Profit & Loss</div>
+    <div class="nav-item" onclick="showPage('balance', this)"><span class="icon">⚖️</span> Balance Sheet</div>
+    <div class="nav-item" onclick="showPage('trial', this)"><span class="icon">📋</span> Trial Balance</div>
+    <div class="nav-item" onclick="showPage('stock', this)"><span class="icon">📦</span> Stock Report</div>
+    <div class="nav-item" onclick="showPage('income', this)"><span class="icon">💵</span> Income & Expenses</div>
     <div class="nav-section">Assets & Liabilities</div>
-    <div class="nav-item" onclick="showPage('assets')"><span class="icon">🏗️</span> Fixed Assets</div>
-    <div class="nav-item" onclick="showPage('liabilities')"><span class="icon">📑</span> Liabilities</div>
+    <div class="nav-item" onclick="showPage('assets', this)"><span class="icon">🏗️</span> Fixed Assets</div>
+    <div class="nav-item" onclick="showPage('liabilities', this)"><span class="icon">📑</span> Liabilities</div>
     <div class="nav-section">Operations</div>
-    <div class="nav-item" onclick="showPage('products')"><span class="icon">📦</span> Products</div>
-    <div class="nav-item" onclick="showPage('purchases')"><span class="icon">🛒</span> Purchases from Alaa</div>
-    <div class="nav-item" onclick="showPage('importcosts')"><span class="icon">🚢</span> Import & Extra Costs</div>
-    <div class="nav-item" onclick="showPage('cogs')"><span class="icon">📊</span> Cost Analysis</div>
-    <div class="nav-item" onclick="showPage('suppliers')"><span class="icon">🏭</span> Suppliers</div>
-    <div class="nav-item" onclick="showPage('salaries')"><span class="icon">👥</span> Employee Salaries</div>
-    <div class="nav-item" onclick="showPage('bank')"><span class="icon">🏦</span> Bank Reconciliation</div>
+    <div class="nav-item" onclick="showPage('products', this)"><span class="icon">📦</span> Products</div>
+    <div class="nav-item" onclick="showPage('purchases', this)"><span class="icon">🛒</span> Purchases from Alaa</div>
+    <div class="nav-item" onclick="showPage('importcosts', this)"><span class="icon">🚢</span> Import & Extra Costs</div>
+    <div class="nav-item" onclick="showPage('cogs', this)"><span class="icon">📊</span> Cost Analysis</div>
+    <div class="nav-item" onclick="showPage('suppliers', this)"><span class="icon">🏭</span> Suppliers</div>
+    <div class="nav-item" onclick="showPage('salaries', this)"><span class="icon">👥</span> Employee Salaries</div>
+    <div class="nav-item" onclick="showPage('bank', this)"><span class="icon">🏦</span> Bank Reconciliation</div>
     <div class="nav-section">Customers</div>
-    <div class="nav-item" onclick="showPage('ledger')"><span class="icon">📋</span> Customer Ledger</div>
-    <div class="nav-item" onclick="showPage('aging')"><span class="icon">⏰</span> Aging Report</div>
-    <div class="nav-item" onclick="showPage('accounts')"><span class="icon">📒</span> Chart of Accounts</div>
+    <div class="nav-item" onclick="showPage('ledger', this)"><span class="icon">📋</span> Customer Ledger</div>
+    <div class="nav-item" onclick="showPage('aging', this)"><span class="icon">⏰</span> Aging Report</div>
+    <div class="nav-item" onclick="showPage('accounts', this)"><span class="icon">📒</span> Chart of Accounts</div>
   </nav>
   <div class="sidebar-footer">
     Connected to POS App<br>Auto-syncs sales data<br>
@@ -1277,24 +1277,26 @@ async function syncData() {
 }
 
 function loadCurrentPage(page) {
-  if (page === 'dashboard') loadDashboard();
-  else if (page === 'pl') loadPL();
-  else if (page === 'balance') loadBalanceSheet();
-  else if (page === 'income') loadTransactions();
-  else if (page === 'suppliers') loadSuppliers();
-  else if (page === 'salaries') loadEmployees();
-  else if (page === 'products') loadProducts();
-  else if (page === 'purchases') loadPurchaseOrders();
-  else if (page === 'importcosts') loadImportCosts();
-  else if (page === 'cogs') loadCOGS();
-  else if (page === 'trial') loadTrialBalance();
-  else if (page === 'stock') loadStockReport();
-  else if (page === 'accounts') loadAccounts();
-  else if (page === 'assets') loadAssets();
-  else if (page === 'liabilities') loadPayables();
-  else if (page === 'bank') loadBank();
-  else if (page === 'ledger') loadLedger();
-  else if (page === 'aging') loadAging();
+  try {
+    if (page === 'dashboard') loadDashboard();
+    else if (page === 'pl') loadPL();
+    else if (page === 'balance') loadBalanceSheet();
+    else if (page === 'income') loadTransactions();
+    else if (page === 'suppliers') loadSuppliers();
+    else if (page === 'salaries') loadEmployees();
+    else if (page === 'products') loadProducts();
+    else if (page === 'purchases') loadPurchaseOrders();
+    else if (page === 'importcosts') loadImportCosts();
+    else if (page === 'cogs') loadCOGS();
+    else if (page === 'trial') loadTrialBalance();
+    else if (page === 'stock') loadStockReport();
+    else if (page === 'accounts') loadAccounts();
+    else if (page === 'assets') loadAssets();
+    else if (page === 'liabilities') loadPayables();
+    else if (page === 'bank') loadBank();
+    else if (page === 'ledger') loadLedger();
+    else if (page === 'aging') loadAging();
+  } catch(e) { console.error('loadCurrentPage error [' + page + ']:', e.message); }
 }
 
 // ═══════════════════════════════════════════
@@ -1321,15 +1323,20 @@ const pageTitles = {
   accounts: ['Chart of Accounts', 'All ledger accounts and opening balances'],
 };
 
-function showPage(page) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById('page-' + page).classList.add('active');
-  event.currentTarget.classList.add('active');
-  const [title, sub] = pageTitles[page] || [page, ''];
-  document.getElementById('page-title').textContent = title;
-  document.getElementById('page-sub').textContent = sub;
-  loadCurrentPage(page);
+function showPage(page, el) {
+  try {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    const pageEl = document.getElementById('page-' + page);
+    if (!pageEl) { console.warn('Page not found: page-' + page); return; }
+    pageEl.classList.add('active');
+    const navEl = el || (typeof event !== 'undefined' && event?.currentTarget);
+    if (navEl && navEl.classList) navEl.classList.add('active');
+    const [title, sub] = pageTitles[page] || [page, ''];
+    document.getElementById('page-title').textContent = title;
+    document.getElementById('page-sub').textContent = sub;
+    loadCurrentPage(page);
+  } catch(e) { console.error('showPage error:', e.message); }
 }
 
 // ═══════════════════════════════════════════
@@ -1444,7 +1451,9 @@ function loadDashboard() {
 }
 
 function buildRevExpChart(from, to) {
-  const ctx = document.getElementById('chart-rev-exp').getContext('2d');
+  try {
+  const ctx = document.getElementById('chart-rev-exp')?.getContext('2d');
+  if (!ctx) return;
   if (chartRevExp) chartRevExp.destroy();
   // Group by month
   const months = {};
@@ -1470,10 +1479,13 @@ function buildRevExpChart(from, to) {
     },
     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
   });
+  } catch(e) { console.warn('Chart error:', e.message); }
 }
 
 function buildBreakdownChart(revenue, totalExp, purchases, salaries, other) {
-  const ctx = document.getElementById('chart-breakdown').getContext('2d');
+  try {
+  const ctx = document.getElementById('chart-breakdown')?.getContext('2d');
+  if (!ctx) return;
   if (chartBreakdown) chartBreakdown.destroy();
   chartBreakdown = new Chart(ctx, {
     type: 'doughnut',
@@ -1483,6 +1495,7 @@ function buildBreakdownChart(revenue, totalExp, purchases, salaries, other) {
     },
     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
   });
+  } catch(e) { console.warn('Chart error:', e.message); }
 }
 
 // ═══════════════════════════════════════════
