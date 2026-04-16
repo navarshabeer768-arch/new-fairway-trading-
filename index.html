@@ -1551,16 +1551,16 @@ async function dbGetByIndex(table, col, val) {
 
 async function dbAdd(table, data) {
   const pk = getPK(table);
-  // Sanitize input data to remove any non-cloneable objects
   const safeData = JSON.parse(JSON.stringify(data));
   try {
     const result = await Promise.race([
-      sb.from(table).insert(safeData).select().single(),
+      sb.from(table).insert(safeData).select(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000))
     ]);
-    const res = result?.data;
+    const rows = result?.data;
     const error = result?.error;
     if (error) throw new Error(error.message);
+    const res = Array.isArray(rows) ? rows[0] : rows;
     if (res) {
       const plain = JSON.parse(JSON.stringify(res));
       if (!localCache[table]) localCache[table] = [];
@@ -1568,7 +1568,6 @@ async function dbAdd(table, data) {
       return plain[pk];
     }
   } catch(e) {
-    // Suppress noisy DataCloneError warnings in console
     if (!e.message?.includes('DataClone') && !e.message?.includes('postMessage')) {
       console.warn(`dbAdd ${table}:`, e.message);
     }
@@ -2369,9 +2368,10 @@ async function completeOrder() {
       const itemData = {
         invoice_id: invId,
         product_id: item.product_id,
+        name: item.name || '',
         quantity: bagsToDeduct,
         price: item.basePrice || item.price || 0,
-        cost: item.cost ? (item.cost / (item.bagsPerBox || getCasesPerBox(prodMap?.[item.product_id]) || 1)) : 0, // cost per bag
+        cost: item.cost ? (item.cost / (item.bagsPerBox || getCasesPerBox(prodMap?.[item.product_id]) || 1)) : 0,
         total: item.total || 0
       };
       // Try optional columns - won't break if they don't exist
@@ -3401,10 +3401,10 @@ async function saveEditedInvoice() {
         display_unit: 'Box',
         uom: 'box',
         is_foc: 0
-      }).select().single();
+      }).select();
       if (r.error) {
         // Retry with minimal columns only
-        const r2 = await sb.from('invoice_items').insert(insertData).select().single();
+        const r2 = await sb.from('invoice_items').insert(insertData).select();
         if (r2.error) console.warn('Insert failed:', r2.error.message);
       }
     } catch(e) {
@@ -3429,7 +3429,7 @@ async function saveEditedInvoice() {
       try {
         const r = await sb.from('invoice_items').insert({
           ...insertData, display_unit: 'Box', uom: 'box', is_foc: 0
-        }).select().single();
+        }).select();
         if (r.error) await sb.from('invoice_items').insert(insertData);
         // Deduct from truck inventory
         const invRows = await dbGetByIndex('inventory', 'product_id', item.product_id);
