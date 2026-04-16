@@ -376,7 +376,7 @@ input[type=number]{-moz-appearance:textfield;}
       <div class="sum-val" id="hs-invoices">0</div>
       <div class="sum-lbl">Invoices</div>
     </div>
-    <div class="sum-card">
+    <div class="sum-card" id="hs-profit-card">
       <div class="sum-val" id="hs-profit">QR 0</div>
       <div class="sum-lbl">Profit</div>
     </div>
@@ -652,6 +652,14 @@ input[type=number]{-moz-appearance:textfield;}
       <div class="form-group">
         <label class="form-label">Address</label>
         <input type="text" class="form-input" id="cust-address" placeholder="Area, Street, Doha">
+      </div>
+      <div class="form-group">
+        <label class="form-label">📍 Google Maps Location</label>
+        <div style="display:flex;gap:6px;">
+          <input type="text" class="form-input" id="cust-map-url" placeholder="Paste Maps link or tap GPS" oninput="previewCustMap()" style="flex:1;font-size:.82rem;">
+          <button type="button" class="btn btn-outline btn-sm" onclick="getCustomerGPS()">🎯 GPS</button>
+        </div>
+        <div id="cust-map-preview" style="margin-top:4px;font-size:.78rem;display:none;"></div>
       </div>
       <div class="form-group">
         <label class="form-label">💳 Credit Limit (QR) <span style="font-size:.75rem;color:var(--text2);">0 = no limit</span></label>
@@ -1416,16 +1424,22 @@ input[type=number]{-moz-appearance:textfield;}
         <button class="btn btn-primary btn-block" onclick="submitHandover()">💵 Submit to Admin</button>
       </div>
       <div id="handover-history-emp" style="margin-top:12px;"></div>
+      <div id="handover-all-history-emp" style="margin-top:8px;"></div>
     </div>
     <!-- Admin: see all submissions -->
     <div id="handover-admin-section" style="display:none;">
-      <div style="display:flex;gap:8px;margin-bottom:8px;">
-        <input type="date" class="form-input" id="handover-admin-date" onchange="loadHandoverAdmin()" style="flex:1;">
-        <select class="form-input" id="handover-admin-emp" onchange="loadHandoverAdmin()" style="flex:1;font-size:.85rem;">
+      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+        <input type="date" class="form-input" id="handover-admin-date" onchange="loadHandoverAdmin()" style="flex:1;min-width:130px;">
+        <select class="form-input" id="handover-admin-emp" onchange="loadHandoverAdmin()" style="flex:1;min-width:130px;font-size:.85rem;">
           <option value="">👥 All Employees</option>
         </select>
+        <button class="btn btn-outline btn-sm" onclick="printHandoverReport()">🖨️ Print Report</button>
       </div>
       <div id="handover-admin-list"></div>
+      <div style="margin-top:12px;">
+        <div class="section-title" style="margin-bottom:8px;">📜 Full History</div>
+        <div id="handover-full-history"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1900,6 +1914,8 @@ async function updateHomeSummary() {
   const profit = totalSales - cost - totalExp;
   const profitEl = document.getElementById('hs-profit');
   profitEl.textContent = 'QR ' + profit.toFixed(0);
+  const profitCard = document.getElementById('hs-profit-card');
+  if (profitCard) profitCard.style.display = isAdmin() ? '' : 'none';
   profitEl.style.color = profit >= 0 ? '#4cff72' : '#ff6b6b';
   // Update orders badge
   try {
@@ -1971,15 +1987,7 @@ async function loadPOSScreen() {
 
 function renderPOSProducts(products) {
   const grid = document.getElementById('pos-products');
-  if (!products.length) {
-    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;padding:32px 16px;text-align:center;">
-      <div style="font-size:2.5rem;">📦</div>
-      <div style="font-weight:700;margin:8px 0 4px;">No products yet</div>
-      <div style="font-size:.8rem;color:var(--text2);margin-bottom:16px;">Add products first via the Products screen, or add a purchase in Finance app then sync.</div>
-      <button class="btn btn-primary btn-sm" onclick="showScreen('products-screen')">➕ Add Products</button>
-    </div>`;
-    return;
-  }
+  if (!products.length) { grid.innerHTML = '<div class="empty-state"><div>🔍</div><div>No products found</div></div>'; return; }
   grid.innerHTML = products.map(p => {
     const stock = p.truckQty || 0;
     const cpb = getCasesPerBox(p);
@@ -2491,7 +2499,7 @@ async function loadInventory() {
         ${imgHtml}
         <div class="inv-info">
           <div class="inv-name">${p.name}</div>
-          <div class="inv-detail">${p.category} · Cost: ${fmtMoney(p.cost_price)} · Sell: ${fmtMoney(p.selling_price)}</div>
+          <div class="inv-detail">${p.category}${isAdmin()?' · Cost: '+fmtMoney(p.cost_price):''} · Sell: ${fmtMoney(p.selling_price)}</div>
           <div class="inv-detail">📦 ${cpb} cases/box · Low alert: ${p.low_stock_threshold||10}</div>
           <div style="display:flex;gap:12px;margin-top:4px;">
             <div style="font-size:.75rem;"><span style="color:var(--navy);font-weight:700;">🚛 Truck:</span> ${truckFmt}</div>
@@ -2698,11 +2706,34 @@ function openCustomerModal(cust) {
   document.getElementById('cust-contact').value = cust ? cust.contact_person || '' : '';
   document.getElementById('cust-phone').value = cust ? cust.phone || '' : '';
   document.getElementById('cust-address').value = cust ? cust.address || '' : '';
+  var _me = document.getElementById('cust-map-url'); if (_me) _me.value = cust ? (cust.map_url || '') : '';
+  var _mp = document.getElementById('cust-map-preview'); if (_mp) { _mp.style.display='none'; }
   const clEl = document.getElementById('cust-credit-limit');
   if (clEl) clEl.value = cust ? (cust.credit_limit || 0) : 0;
   openModal('customer-modal');
 }
 
+function getCustomerGPS() {
+  if (!navigator.geolocation) { showToast('GPS not available'); return; }
+  showToast('📍 Getting location...');
+  navigator.geolocation.getCurrentPosition(function(pos) {
+    const lat = pos.coords.latitude.toFixed(6);
+    const lng = pos.coords.longitude.toFixed(6);
+    const url = 'https://maps.google.com/?q=' + lat + ',' + lng;
+    const el = document.getElementById('cust-map-url');
+    if (el) el.value = url;
+    const prev = document.getElementById('cust-map-preview');
+    if (prev) { prev.style.display = ''; prev.innerHTML = '<a href="' + url + '" target="_blank" style="color:var(--navy);">📍 ' + lat + ', ' + lng + ' — Open Maps</a>'; }
+    showToast('✅ Location captured!');
+  }, function() { showToast('⚠️ GPS failed. Paste a Maps link manually.'); });
+}
+function previewCustMap() {
+  const url = (document.getElementById('cust-map-url') || {}).value || '';
+  const prev = document.getElementById('cust-map-preview');
+  if (!prev) return;
+  if (url.length > 10) { prev.style.display = ''; prev.innerHTML = '<a href="' + url + '" target="_blank" style="color:var(--navy);">🗺️ Open Map Link</a>'; }
+  else prev.style.display = 'none';
+}
 async function saveCustomer() {
   const name = document.getElementById('cust-name').value.trim();
   if (!name) { showToast('⚠️ Name is required!'); return; }
@@ -2715,6 +2746,7 @@ async function saveCustomer() {
     contact_person: document.getElementById('cust-contact').value,
     phone: document.getElementById('cust-phone').value,
     address: document.getElementById('cust-address').value,
+    map_url: (document.getElementById('cust-map-url')||{}).value || '',
     credit_balance: 0,
     created_at: new Date().toISOString()
   };
@@ -3113,7 +3145,7 @@ async function editInvoice() {
     </div>`;
   }).join('');
   // Add product selector
-  const productOptions = prods.sort((a,b)=>a.name.localeCompare(b.name)).map(p => `<option value="${p.product_id}" data-price="${p.selling_price}" data-unit="${p.unit||''}">${p.name} — ${fmtMoney(p.selling_price)}</option>`).join('');
+  const productOptions = prods.sort((a,b)=>a.name.localeCompare(b.name)).map(p => `<option value="${p.product_id}" data-price="${p.selling_price}" data-unit="${p.unit||''}" data-cpb="${p.cases_per_box||4}">${p.name} — ${fmtMoney(p.selling_price)}</option>`).join('');
   document.getElementById('edit-inv-content').innerHTML = `
     <div class="alert alert-warning">⚠️ Editing will automatically update truck inventory.</div>
     <div class="form-group">
@@ -3147,7 +3179,7 @@ async function editInvoice() {
     ${itemsHtml}
     <div class="divider"></div>
     <div class="section-title">➕ Add Product</div>
-    <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end;">
+    <div style="display:grid;grid-template-columns:1fr 60px 60px auto;gap:8px;align-items:end;">
       <div class="form-group" style="margin:0;">
         <label class="form-label">Product</label>
         <select class="form-select" id="edit-add-product">
@@ -3156,11 +3188,16 @@ async function editInvoice() {
         </select>
       </div>
       <div class="form-group" style="margin:0;">
-        <label class="form-label">Qty</label>
-        <input type="number" class="form-input" id="edit-add-qty" value="1" min="1" style="width:70px;">
+        <label class="form-label">Boxes</label>
+        <input type="number" class="form-input" id="edit-add-boxes" value="0" min="0" style="width:60px;" oninput="calcEditAddTotal()">
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label">Bags</label>
+        <input type="number" class="form-input" id="edit-add-bags" value="0" min="0" style="width:60px;" oninput="calcEditAddTotal()">
       </div>
       <button class="btn btn-primary" onclick="addProductToEditInvoice()" style="margin-bottom:0;">Add</button>
     </div>
+    <div id="edit-add-preview" style="font-size:.82rem;color:var(--navy);font-weight:700;margin-top:4px;text-align:center;"></div>
     <div id="edit-added-items"></div>`;
   openModal('edit-inv-modal');
 }
@@ -3186,29 +3223,52 @@ function setEditPayType(type) {
   document.getElementById('edit-cheque-row').style.display = type === 'cheque' ? 'block' : 'none';
 }
 
+function calcEditAddTotal() {
+  const sel = document.getElementById('edit-add-product');
+  if (!sel || !sel.value) return;
+  const opt = sel.options[sel.selectedIndex];
+  const price = parseFloat(opt.getAttribute('data-price')) || 0;
+  const cpb = parseInt(opt.getAttribute('data-cpb')) || 4;
+  const boxes = parseInt(document.getElementById('edit-add-boxes')?.value) || 0;
+  const bags = parseInt(document.getElementById('edit-add-bags')?.value) || 0;
+  const total = boxes * price + bags * (price / cpb);
+  const preview = document.getElementById('edit-add-preview');
+  if (preview) preview.textContent = (boxes||bags) ? fmtMoney(total) + ' · ' + (boxes*cpb+bags) + ' bags' : '';
+}
+function renderEditAddedItems() {
+  const container = document.getElementById('edit-added-items');
+  if (!container) return;
+  container.innerHTML = editAddedItems.map((item, i) =>
+    '<div style="display:flex;align-items:center;gap:8px;padding:8px;background:#e8f5e9;border-radius:8px;margin-top:6px;">' +
+    '<div style="flex:1;font-size:.85rem;font-weight:600;">+ ' + item.name + '</div>' +
+    '<span style="font-size:.82rem;">×' + item.quantity + ' bags</span>' +
+    '<span style="font-size:.85rem;font-weight:700;">' + fmtMoney(item.total) + '</span>' +
+    '<button onclick="editAddedItems.splice(' + i + ',1);renderEditAddedItems();" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;">✕</button>' +
+    '</div>'
+  ).join('');
+}
 function addProductToEditInvoice() {
   const sel = document.getElementById('edit-add-product');
-  const qty = parseInt(document.getElementById('edit-add-qty').value) || 1;
   const productId = parseInt(sel.value);
   if (!productId) { showToast('⚠️ Select a product!'); return; }
   const opt = sel.options[sel.selectedIndex];
   const price = parseFloat(opt.getAttribute('data-price')) || 0;
-  const unit = opt.getAttribute('data-unit') || '';
+  const cpb = parseInt(opt.getAttribute('data-cpb')) || 4;
+  const unit = opt.getAttribute('data-unit') || 'box';
   const name = opt.text.split(' — ')[0];
-  editAddedItems.push({ product_id: productId, name, quantity: qty, price, unit, total: qty * price });
-  const container = document.getElementById('edit-added-items');
-  if (container) {
-    container.innerHTML = editAddedItems.map((item, i) => `
-      <div style="display:flex;align-items:center;gap:8px;padding:8px;background:#e8f5e9;border-radius:8px;margin-top:6px;">
-        <div style="flex:1;font-size:.85rem;font-weight:600;">+ ${item.name}</div>
-        <span style="font-size:.82rem;">×${item.quantity} ${item.unit}</span>
-        <span style="font-size:.85rem;font-weight:700;">${fmtMoney(item.total)}</span>
-        <button onclick="editAddedItems.splice(${i},1);addProductToEditInvoice();" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;">✕</button>
-      </div>`).join('');
-  }
+  const boxes = parseInt(document.getElementById('edit-add-boxes')?.value) || 0;
+  const bags = parseInt(document.getElementById('edit-add-bags')?.value) || 0;
+  const totalBags = boxes * cpb + bags;
+  if (totalBags <= 0) { showToast('⚠️ Enter boxes or bags!'); return; }
+  const total = boxes * price + bags * (price / cpb);
+  editAddedItems.push({ product_id: productId, name, quantity: totalBags, price, unit, total });
+  renderEditAddedItems();
   sel.value = '';
-  document.getElementById('edit-add-qty').value = 1;
-  showToast('✅ ' + name + ' added');
+  if (document.getElementById('edit-add-boxes')) document.getElementById('edit-add-boxes').value = 0;
+  if (document.getElementById('edit-add-bags')) document.getElementById('edit-add-bags').value = 0;
+  const preview = document.getElementById('edit-add-preview');
+  if (preview) preview.textContent = '';
+  showToast('✅ ' + name + ' added (' + totalBags + ' bags)');
 }
 
 async function saveEditedInvoice() {
@@ -3623,7 +3683,7 @@ async function loadProducts() {
       <div class="inv-info">
         <div class="inv-name">${p.name}</div>
         <div class="inv-detail">${p.category} · ${p.unit}</div>
-        <div class="inv-detail">Cost: ${fmtMoney(p.cost_price)} · Sell: ${fmtMoney(p.selling_price)} · Margin: ${((p.selling_price-p.cost_price)/p.selling_price*100).toFixed(0)}%</div>
+        <div class="inv-detail">${isAdmin()?"Cost: "+fmtMoney(p.cost_price)+" · ":""}Sell: ${fmtMoney(p.selling_price)}${isAdmin()?" · Margin: "+((p.selling_price-p.cost_price)/p.selling_price*100).toFixed(0)+"%":""}</div>
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;">
         <button class="btn btn-outline btn-sm" onclick="editProduct(${p.product_id})">✏️</button>
@@ -3646,7 +3706,7 @@ function filterProductList() {
         ${imgHtml}
         <div class="inv-info">
           <div class="inv-name">${p.name}</div>
-          <div class="inv-detail">${p.category} · Cost: ${fmtMoney(p.cost_price)} · Sell: ${fmtMoney(p.selling_price)}</div>
+          <div class="inv-detail">${p.category}${isAdmin()?' · Cost: '+fmtMoney(p.cost_price):''} · Sell: ${fmtMoney(p.selling_price)}</div>
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;">
           <button class="btn btn-outline btn-sm" onclick="editProduct(${p.product_id})">✏️</button>
@@ -7056,34 +7116,85 @@ async function submitHandover() {
 async function loadHandoverAdmin() {
   const filterDate = document.getElementById('handover-admin-date')?.value || today();
   const filterEmp = document.getElementById('handover-admin-emp')?.value || '';
-  let handovers = await getHandovers();
-  handovers = handovers.filter(h=>h.date===filterDate);
+  let allHandovers = await getHandovers();
+  let handovers = allHandovers.filter(h=>h.date===filterDate);
   if (filterEmp) handovers = handovers.filter(h=>h.employee===filterEmp);
   const list = document.getElementById('handover-admin-list');
   if (!list) return;
   if (!handovers.length) {
     list.innerHTML = '<div class="empty-state"><div>💵</div><div>No handovers on this date</div></div>';
-    return;
+  } else {
+    const totalConf = handovers.filter(h=>h.confirmed).reduce((a,h)=>a+h.amount,0);
+    const totalPending = handovers.filter(h=>!h.confirmed).reduce((a,h)=>a+h.amount,0);
+    list.innerHTML = `<div class="card" style="margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;font-size:.9rem;font-weight:700;">
+        <span style="color:var(--green);">✅ Confirmed: ${fmtMoney(totalConf)}</span>
+        <span style="color:var(--gold);">⏳ Pending: ${fmtMoney(totalPending)}</span>
+      </div></div>` +
+      handovers.map(h=>`<div class="card" style="margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-weight:700;">👤 ${h.employee}</div>
+            <div style="font-size:.78rem;color:var(--text2);">${h.time}${h.notes?' · <em>'+h.notes+'</em>':''}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:1.1rem;font-weight:800;">${fmtMoney(h.amount)}</div>
+            ${h.confirmed ? `<div style="color:var(--green);font-size:.78rem;font-weight:700;">✅ ${h.confirmed_time||'Confirmed'}</div>` :
+              `<button class="btn btn-primary btn-sm" onclick="confirmHandover(${h.id})" style="margin-top:4px;">✅ Confirm</button>`}
+          </div>
+        </div></div>`).join('');
   }
-  const totalConf = handovers.filter(h=>h.confirmed).reduce((a,h)=>a+h.amount,0);
-  const totalPending = handovers.filter(h=>!h.confirmed).reduce((a,h)=>a+h.amount,0);
-  list.innerHTML = `<div class="card" style="margin-bottom:12px;">
-    <div style="display:flex;justify-content:space-between;font-size:.9rem;font-weight:700;">
-      <span>✅ Confirmed: ${fmtMoney(totalConf)}</span>
-      <span style="color:var(--gold);">⏳ Pending: ${fmtMoney(totalPending)}</span>
-    </div></div>` +
-    handovers.map(h=>`<div class="card" style="margin-bottom:8px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
+  // Full history section (all dates, filtered by emp if selected)
+  const histEl = document.getElementById('handover-full-history');
+  if (histEl) {
+    let hist = filterEmp ? allHandovers.filter(h=>h.employee===filterEmp) : allHandovers;
+    hist = hist.slice().sort((a,b)=>b.date.localeCompare(a.date)||(b.id-a.id)).slice(0,50);
+    if (!hist.length) { histEl.innerHTML = '<div style="color:var(--text2);font-size:.85rem;text-align:center;padding:12px;">No history yet</div>'; }
+    else {
+      histEl.innerHTML = hist.map(h=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);font-size:.82rem;">
         <div>
-          <div style="font-weight:700;">👤 ${h.employee}</div>
-          <div style="font-size:.78rem;color:var(--text2);">${h.time}${h.notes?' · '+h.notes:''}</div>
+          <span style="font-weight:700;color:var(--navy);">${h.date}</span>
+          <span style="margin-left:8px;color:var(--text2);">${h.time||''}</span>
+          <span style="margin-left:8px;font-weight:600;">${h.employee}</span>
+          ${h.notes?`<span style="margin-left:6px;color:var(--text2);font-style:italic;">${h.notes}</span>`:''}
         </div>
         <div style="text-align:right;">
-          <div style="font-size:1.1rem;font-weight:800;">${fmtMoney(h.amount)}</div>
-          ${h.confirmed ? '<div style="color:var(--green);font-size:.78rem;font-weight:700;">✅ Confirmed</div>' :
-            `<button class="btn btn-primary btn-sm" onclick="confirmHandover(${h.id})" style="margin-top:4px;">✅ Confirm</button>`}
+          <span style="font-weight:800;">${fmtMoney(h.amount)}</span>
+          <span style="margin-left:6px;font-size:.72rem;color:${h.confirmed?'var(--green)':'var(--gold)'};">${h.confirmed?'✅':'⏳'}</span>
         </div>
-      </div></div>`).join('');
+      </div>`).join('');
+    }
+  }
+}
+
+function printHandoverReport() {
+  const date = document.getElementById('handover-admin-date')?.value || today();
+  const empFilter = document.getElementById('handover-admin-emp')?.value || '';
+  getHandovers().then(function(all) {
+    let handovers = all.filter(function(h){ return h.date === date; });
+    if (empFilter) handovers = handovers.filter(function(h){ return h.employee === empFilter; });
+    const totalConf = handovers.filter(function(h){return h.confirmed;}).reduce(function(a,h){return a+h.amount;},0);
+    const totalPending = handovers.filter(function(h){return !h.confirmed;}).reduce(function(a,h){return a+h.amount;},0);
+    const totalAll = handovers.reduce(function(a,h){return a+h.amount;},0);
+    const win = window.open('','_blank');
+    win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Cash Handover Report</title><style>body{font-family:Arial,sans-serif;padding:24px;font-size:13px;}h2{color:#1a237e;}table{width:100%;border-collapse:collapse;margin-top:16px;}th{background:#1a237e;color:#fff;padding:8px 10px;text-align:left;font-size:12px;}td{padding:8px 10px;border-bottom:1px solid #eee;}.total{font-weight:900;font-size:15px;}.green{color:#2e7d32;}.gold{color:#f57f17;}.red{color:#c62828;}@media print{button{display:none!important;}}</style></head><body>');
+    win.document.write('<h2>💵 Cash Handover Report</h2>');
+    win.document.write('<p><strong>Date:</strong> ' + date + (empFilter ? ' &nbsp;|&nbsp; <strong>Employee:</strong> ' + empFilter : ' &nbsp;|&nbsp; All Employees') + '</p>');
+    win.document.write('<p><strong>Generated:</strong> ' + new Date().toLocaleString() + ' &nbsp;|&nbsp; New Fair Way Trading</p>');
+    win.document.write('<table><thead><tr><th>Employee</th><th>Time</th><th>Amount (QR)</th><th>Notes</th><th>Status</th></tr></thead><tbody>');
+    handovers.forEach(function(h) {
+      win.document.write('<tr><td><strong>' + h.employee + '</strong></td><td>' + (h.time||'—') + '</td><td style="font-weight:700;">' + parseFloat(h.amount).toFixed(2) + '</td><td>' + (h.notes||'—') + '</td><td class="' + (h.confirmed?'green':'gold') + '">' + (h.confirmed ? ('✅ Confirmed' + (h.confirmed_time ? ' ' + h.confirmed_time : '')) : '⏳ Pending') + '</td></tr>');
+    });
+    win.document.write('</tbody></table>');
+    win.document.write('<br><table><thead><tr><th colspan="2">Summary</th></tr></thead><tbody>');
+    win.document.write('<tr><td>Total Submitted</td><td class="total">' + totalAll.toFixed(2) + ' QR</td></tr>');
+    win.document.write('<tr><td>✅ Confirmed</td><td class="green total">' + totalConf.toFixed(2) + ' QR</td></tr>');
+    win.document.write('<tr><td>⏳ Pending</td><td class="gold total">' + totalPending.toFixed(2) + ' QR</td></tr>');
+    win.document.write('</tbody></table>');
+    win.document.write('<br><button onclick="window.print()" style="background:#1a237e;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;font-weight:700;cursor:pointer;">🖨️ Print</button>');
+    win.document.write('</body></html>');
+    win.document.close();
+  });
 }
 
 async function confirmHandover(id) {
