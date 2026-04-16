@@ -1632,7 +1632,7 @@ function mergeProductPhotos(products) {
 function getPK(table) {
   const pks = {
     customers: 'customer_id', products: 'product_id', inventory: 'inventory_id',
-    invoices: 'invoice_id', invoice_items: 'item_id', expenses: 'expense_id',
+    invoices: 'invoice_id', invoice_items: 'id', expenses: 'expense_id',
     credit_payments: 'payment_id', settings: 'key',
     warehouse_stock: 'warehouse_id', advance_orders: 'order_id'
   };
@@ -3182,9 +3182,9 @@ async function editInvoice() {
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
         <span style="font-size:.65rem;color:var(--text2);">bags</span>
-        <input type="number" value="${bags}" min="0" style="width:55px;padding:5px;border:1px solid var(--border);border-radius:6px;text-align:center;font-weight:700;" data-item-id="${it.item_id||it.id}" data-product-id="${it.product_id}" data-old-qty="${bags}" data-price-per-box="${pricePerBox}" data-cpb="${cpb}" data-price="${pricePerBag}" class="edit-item-qty" oninput="updateEditTotal()">
+        <input type="number" value="${bags}" min="0" style="width:55px;padding:5px;border:1px solid var(--border);border-radius:6px;text-align:center;font-weight:700;" data-item-id="${it.id}" data-product-id="${it.product_id}" data-old-qty="${bags}" data-price-per-box="${pricePerBox}" data-cpb="${cpb}" data-price="${pricePerBag}" class="edit-item-qty" oninput="updateEditTotal()">
       </div>
-      <span style="font-size:.85rem;font-weight:700;min-width:70px;text-align:right;" id="edit-item-total-${it.item_id||it.id||i}">${fmtMoney(itemTotal)}</span>
+      <span style="font-size:.85rem;font-weight:700;min-width:70px;text-align:right;" id="edit-item-total-${it.id||i}">${fmtMoney(itemTotal)}</span>
     </div>`;
   }).join('') + `<div style="padding:8px;text-align:right;font-size:.9rem;font-weight:800;color:var(--navy);">Current total: <span id="edit-running-total">${fmtMoney(items.reduce((a,it)=>a+parseFloat(it.total||0),0))}</span></div>`;
   // Add product selector
@@ -3504,7 +3504,7 @@ async function openReturnModal() {
         <div style="font-size:.65rem;color:var(--text2);margin-bottom:2px;">Return Qty</div>
         <input type="number" min="0" max="${it.quantity}" value="0"
           style="width:65px;text-align:center;padding:6px;border:2px solid #c62828;border-radius:6px;font-weight:700;font-size:1rem;"
-          data-item-id="${it.item_id}" data-product-id="${it.product_id}" data-qty="${it.quantity}" data-price="${isFOC ? 0 : (it.price||0)}">
+          data-item-id="${it.id}" data-product-id="${it.product_id}" data-qty="${it.quantity}" data-price="${isFOC ? 0 : (it.price||0)}">
       </div>
       <div style="font-weight:700;color:var(--navy);font-size:.9rem;min-width:60px;text-align:right;">QR ${parseFloat(it.total||0).toFixed(2)}</div>
     </div>`;
@@ -3539,7 +3539,7 @@ async function saveReturn() {
     returnedItems.push({ itemId, product_id: productId, returnQty, price });
     // Update invoice item quantity
     const items = await dbGetByIndex('invoice_items', 'invoice_id', selectedInvoiceId);
-    const item = items.find(i => i.item_id === itemId);
+    const item = items.find(i => i.id === itemId);
     if (item) {
       item.quantity = Math.max(0, origQty - returnQty);
       item.total = item.quantity * price;
@@ -5863,7 +5863,7 @@ async function doResetData() {
   showToast('⏳ Deleting all data...');
   // Delete in correct order (foreign key dependencies)
   const tableDeletes = [
-    () => sb.from('invoice_items').delete().gte('item_id', 0),
+    () => sb.from('invoice_items').delete().gte('id', 0),
     () => sb.from('invoices').delete().gte('invoice_id', 0),
     () => sb.from('credit_payments').delete().gte('payment_id', 0),
     () => sb.from('inventory').delete().gte('inventory_id', 0),
