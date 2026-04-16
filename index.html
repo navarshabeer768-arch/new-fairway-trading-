@@ -3156,6 +3156,8 @@ async function editInvoice() {
   if (!isAdmin()) { showToast("⚠️ Admin access required"); return; }
   if (!selectedInvoiceId) return;
   const inv = await dbGet('invoices', selectedInvoiceId);
+  // Always fetch fresh items from Supabase — bypass cache
+  delete localCache['invoice_items'];
   const items = await dbGetByIndex('invoice_items', 'invoice_id', selectedInvoiceId);
   const prods = await dbGetAll('products');
   const prodMap = {}; prods.forEach(p => { prodMap[p.product_id]=p; prodMap[String(p.product_id)]=p; });
@@ -3172,7 +3174,7 @@ async function editInvoice() {
     const itemTotal = parseFloat(it.total || (bags * pricePerBag));
     return `<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--surface2);border-radius:8px;margin-bottom:6px;">
       <div style="flex:1;">
-        <div style="font-size:.85rem;font-weight:600;">${p?.name||'?'}</div>
+        <div style="font-size:.85rem;font-weight:600;" class="edit-product-name">${p?.name||'?'}</div>
         <div style="font-size:.72rem;color:var(--text2);">${qtyDisplay} · QR ${pricePerBox.toFixed(2)}/box (QR ${pricePerBag.toFixed(3)}/bag)</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
@@ -3353,15 +3355,9 @@ async function saveEditedInvoice() {
   let newTotal = 0;
 
   // ── Step 1: Delete ALL existing invoice items for this invoice ──
-  // This prevents duplicates — we'll re-insert clean versions below
   try {
     await sb.from('invoice_items').delete().eq('invoice_id', selectedInvoiceId);
-    // Also clear local cache
-    if (localCache['invoice_items']) {
-      localCache['invoice_items'] = localCache['invoice_items'].filter(
-        i => i.invoice_id !== selectedInvoiceId
-      );
-    }
+    delete localCache['invoice_items']; // force fresh fetch next time
   } catch(e) { console.warn('Delete old items failed:', e.message); }
 
   // ── Step 2: Re-insert updated existing items ──
@@ -3375,7 +3371,6 @@ async function saveEditedInvoice() {
     if (newQty <= 0) continue;
 
     const diff = newQty - oldQty;
-    // Update truck inventory
     if (diff !== 0) {
       try {
         const invRows = await dbGetByIndex('inventory', 'product_id', productId);
@@ -3388,22 +3383,33 @@ async function saveEditedInvoice() {
     }
 
     const itemTotal = parseFloat((newQty * pricePerBag).toFixed(2));
-    const productName = input.closest('div')?.querySelector('div > div:first-child')?.textContent || '';
+    const productName = input.closest('div')?.querySelector('.edit-product-name')?.textContent || '';
+    // Only send columns confirmed to exist in Supabase (from schema screenshot)
+    const insertData = {
+      invoice_id: selectedInvoiceId,
+      product_id: productId,
+      name: productName,
+      quantity: newQty,
+      price: pricePerBox,
+      cost: 0,
+      total: itemTotal
+    };
+    // Optionally add extra columns — ignore if they don't exist
     try {
-      await sb.from('invoice_items').insert({
-        invoice_id: selectedInvoiceId,
-        product_id: productId,
-        name: productName,
-        quantity: newQty,
-        price: pricePerBox,
-        cost: 0,
-        total: itemTotal,
-        unit: 'box',
+      const r = await sb.from('invoice_items').insert({
+        ...insertData,
         display_unit: 'Box',
         uom: 'box',
         is_foc: 0
-      });
-    } catch(e) { console.warn('Re-insert item failed:', e.message); }
+      }).select().single();
+      if (r.error) {
+        // Retry with minimal columns only
+        const r2 = await sb.from('invoice_items').insert(insertData).select().single();
+        if (r2.error) console.warn('Insert failed:', r2.error.message);
+      }
+    } catch(e) {
+      try { await sb.from('invoice_items').insert(insertData); } catch(e2) { console.warn('Insert retry failed:', e2.message); }
+    }
     newTotal += itemTotal;
   }
 
@@ -3411,20 +3417,20 @@ async function saveEditedInvoice() {
   if (typeof editAddedItems !== 'undefined' && editAddedItems.length > 0) {
     for (const item of editAddedItems) {
       const itemTotal = parseFloat(item.total.toFixed(2));
+      const insertData = {
+        invoice_id: selectedInvoiceId,
+        product_id: item.product_id,
+        name: item.name || '',
+        quantity: item.quantity,
+        price: item.price,
+        cost: 0,
+        total: itemTotal
+      };
       try {
-        await sb.from('invoice_items').insert({
-          invoice_id: selectedInvoiceId,
-          product_id: item.product_id,
-          name: item.name || '',
-          quantity: item.quantity,
-          price: item.price,
-          cost: 0,
-          total: itemTotal,
-          unit: item.unit || 'box',
-          display_unit: 'Box',
-          uom: 'box',
-          is_foc: 0
-        });
+        const r = await sb.from('invoice_items').insert({
+          ...insertData, display_unit: 'Box', uom: 'box', is_foc: 0
+        }).select().single();
+        if (r.error) await sb.from('invoice_items').insert(insertData);
         // Deduct from truck inventory
         const invRows = await dbGetByIndex('inventory', 'product_id', item.product_id);
         if (invRows.length > 0) {
@@ -3432,7 +3438,9 @@ async function saveEditedInvoice() {
           invRows[0].last_updated = new Date().toISOString();
           await dbPut('inventory', invRows[0]);
         }
-      } catch(e) { console.warn('New item insert failed:', e.message); }
+      } catch(e) {
+        try { await sb.from('invoice_items').insert(insertData); } catch(e2) {}
+      }
       newTotal += itemTotal;
     }
     editAddedItems = [];
