@@ -3176,8 +3176,13 @@ async function editInvoice() {
         <div style="font-size:.72rem;color:var(--text2);">${qtyDisplay} · QR ${pricePerBox.toFixed(2)}/box (QR ${pricePerBag.toFixed(3)}/bag)</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+        <span style="font-size:.65rem;color:var(--text2);">boxes</span>
+        <input type="number" value="${boxes}" min="0" style="width:55px;padding:5px;border:1px solid var(--border);border-radius:6px;text-align:center;font-weight:700;background:var(--surface2);" 
+          oninput="syncBoxBagInput(this, ${cpb})" data-cpb="${cpb}" data-sibling="bags">
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
         <span style="font-size:.65rem;color:var(--text2);">bags</span>
-        <input type="number" value="${bags}" min="0" style="width:60px;padding:6px;border:1px solid var(--border);border-radius:6px;text-align:center;font-weight:700;" data-item-id="${it.item_id||it.id}" data-product-id="${it.product_id}" data-old-qty="${bags}" data-price-per-box="${pricePerBox}" data-cpb="${cpb}" data-price="${pricePerBag}" class="edit-item-qty" oninput="updateEditTotal()">
+        <input type="number" value="${bags}" min="0" style="width:55px;padding:5px;border:1px solid var(--border);border-radius:6px;text-align:center;font-weight:700;" data-item-id="${it.item_id||it.id}" data-product-id="${it.product_id}" data-old-qty="${bags}" data-price-per-box="${pricePerBox}" data-cpb="${cpb}" data-price="${pricePerBag}" class="edit-item-qty" oninput="updateEditTotal()">
       </div>
       <span style="font-size:.85rem;font-weight:700;min-width:70px;text-align:right;" id="edit-item-total-${it.item_id||it.id||i}">${fmtMoney(itemTotal)}</span>
     </div>`;
@@ -3309,6 +3314,19 @@ function addProductToEditInvoice() {
   showToast('✅ ' + name + ' added (' + totalBags + ' bags)');
 }
 
+function syncBoxBagInput(boxInput, cpb) {
+  // When boxes input changes, update the bags input (which is the actual data input)
+  const row = boxInput.closest('div').parentElement;
+  const bagsInput = row.querySelector('.edit-item-qty');
+  if (!bagsInput) return;
+  const boxes = parseInt(boxInput.value) || 0;
+  const currentBags = parseInt(bagsInput.value) || 0;
+  const currentRemBags = currentBags % cpb;
+  // Set total bags = new boxes × cpb + remaining bags
+  bagsInput.value = boxes * cpb + currentRemBags;
+  updateEditTotal();
+}
+
 function updateEditTotal() {
   let total = 0;
   document.querySelectorAll('.edit-item-qty').forEach(input => {
@@ -3359,12 +3377,23 @@ async function saveEditedInvoice() {
     if (newQty <= 0) {
       await dbDelete('invoice_items', itemId);
     } else {
-      oldItem.quantity = newQty;
-      // Preserve original per-box price in DB, recalculate total as bags × perBagPrice
-      oldItem.price = pricePerBox || parseFloat(oldItem.price || 0);
-      oldItem.total = parseFloat((newQty * pricePerBag).toFixed(2));
-      await dbPut('invoice_items', oldItem);
-      newTotal += oldItem.total;
+      // Build clean object with ONLY known Supabase columns — avoids 400 Bad Request
+      const cleanItem = {
+        item_id: itemId,
+        invoice_id: oldItem.invoice_id || selectedInvoiceId,
+        product_id: productId,
+        name: oldItem.name || '',
+        quantity: newQty,
+        price: pricePerBox || parseFloat(oldItem.price || 0),
+        cost: oldItem.cost || 0,
+        total: parseFloat((newQty * pricePerBag).toFixed(2)),
+        unit: oldItem.unit || oldItem.display_unit || 'box',
+        display_unit: oldItem.display_unit || oldItem.unit || 'Box',
+        uom: oldItem.uom || 'box',
+        is_foc: oldItem.is_foc || 0
+      };
+      await dbPut('invoice_items', cleanItem);
+      newTotal += cleanItem.total;
     }
   }
 
