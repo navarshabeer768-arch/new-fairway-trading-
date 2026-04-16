@@ -3348,90 +3348,102 @@ async function saveEditedInvoice() {
   if (!selectedInvoiceId) return;
   const inv = await dbGet('invoices', selectedInvoiceId);
   if (!inv) { showToast('⚠️ Invoice not found'); return; }
-  const oldItems = await dbGetByIndex('invoice_items', 'invoice_id', selectedInvoiceId);
+
   const qtyInputs = document.querySelectorAll('.edit-item-qty');
   let newTotal = 0;
 
-  // Update existing items
+  // ── Step 1: Delete ALL existing invoice items for this invoice ──
+  // This prevents duplicates — we'll re-insert clean versions below
+  try {
+    await sb.from('invoice_items').delete().eq('invoice_id', selectedInvoiceId);
+    // Also clear local cache
+    if (localCache['invoice_items']) {
+      localCache['invoice_items'] = localCache['invoice_items'].filter(
+        i => i.invoice_id !== selectedInvoiceId
+      );
+    }
+  } catch(e) { console.warn('Delete old items failed:', e.message); }
+
+  // ── Step 2: Re-insert updated existing items ──
   for (const input of qtyInputs) {
-    const itemId = parseInt(input.getAttribute('data-item-id'));
     const productId = parseInt(input.getAttribute('data-product-id'));
     const oldQty = parseInt(input.getAttribute('data-old-qty')) || 0;
-    const pricePerBag = parseFloat(input.getAttribute('data-price')) || 0; // per-bag (pricePerBox/cpb)
+    const pricePerBag = parseFloat(input.getAttribute('data-price')) || 0;
     const pricePerBox = parseFloat(input.getAttribute('data-price-per-box')) || 0;
     const cpb = parseInt(input.getAttribute('data-cpb')) || 4;
     const newQty = parseInt(input.value) || 0;
-    const oldItem = oldItems.find(i => i.item_id === itemId || i.id === itemId);
-    if (!oldItem) continue;
+    if (newQty <= 0) continue;
 
     const diff = newQty - oldQty;
+    // Update truck inventory
     if (diff !== 0) {
-      const invRows = await dbGetByIndex('inventory', 'product_id', productId);
-      if (invRows.length > 0) {
-        invRows[0].quantity = Math.max(0, (invRows[0].quantity || 0) - diff);
-        invRows[0].last_updated = new Date().toISOString();
-        await dbPut('inventory', invRows[0]);
-      }
+      try {
+        const invRows = await dbGetByIndex('inventory', 'product_id', productId);
+        if (invRows.length > 0) {
+          invRows[0].quantity = Math.max(0, (invRows[0].quantity || 0) - diff);
+          invRows[0].last_updated = new Date().toISOString();
+          await dbPut('inventory', invRows[0]);
+        }
+      } catch(e) {}
     }
 
-    if (newQty <= 0) {
-      await dbDelete('invoice_items', itemId);
-    } else {
-      // Build clean object with ONLY known Supabase columns — avoids 400 Bad Request
-      const cleanItem = {
-        item_id: itemId,
-        invoice_id: oldItem.invoice_id || selectedInvoiceId,
-        product_id: productId,
-        name: oldItem.name || '',
-        quantity: newQty,
-        price: pricePerBox || parseFloat(oldItem.price || 0),
-        cost: oldItem.cost || 0,
-        total: parseFloat((newQty * pricePerBag).toFixed(2)),
-        unit: oldItem.unit || oldItem.display_unit || 'box',
-        display_unit: oldItem.display_unit || oldItem.unit || 'Box',
-        uom: oldItem.uom || 'box',
-        is_foc: oldItem.is_foc || 0
-      };
-      await dbPut('invoice_items', cleanItem);
-      newTotal += cleanItem.total;
-    }
-  }
-
-  // Add new items
-  if (typeof editAddedItems !== 'undefined' && editAddedItems.length > 0) {
-    for (const item of editAddedItems) {
-      const itemCpb = parseInt(item.cpb) || 4;
-      const newItem = {
+    const itemTotal = parseFloat((newQty * pricePerBag).toFixed(2));
+    const productName = input.closest('div')?.querySelector('div > div:first-child')?.textContent || '';
+    try {
+      await sb.from('invoice_items').insert({
         invoice_id: selectedInvoiceId,
-        product_id: item.product_id,
-        name: item.name || '',
-        quantity: item.quantity,        // bags
-        price: item.price,              // per-box price (same as how POS stores it)
+        product_id: productId,
+        name: productName,
+        quantity: newQty,
+        price: pricePerBox,
         cost: 0,
-        total: parseFloat(item.total.toFixed(2)),
-        display_unit: item.unit || 'box',
+        total: itemTotal,
+        unit: 'box',
+        display_unit: 'Box',
         uom: 'box',
         is_foc: 0
-      };
-      await dbAdd('invoice_items', newItem);
-      newTotal += item.total;
-      // Deduct from truck inventory
-      const invRows = await dbGetByIndex('inventory', 'product_id', item.product_id);
-      if (invRows.length > 0) {
-        invRows[0].quantity = Math.max(0, (invRows[0].quantity||0) - item.quantity);
-        invRows[0].last_updated = new Date().toISOString();
-        await dbPut('inventory', invRows[0]);
-      }
+      });
+    } catch(e) { console.warn('Re-insert item failed:', e.message); }
+    newTotal += itemTotal;
+  }
+
+  // ── Step 3: Insert new added items ──
+  if (typeof editAddedItems !== 'undefined' && editAddedItems.length > 0) {
+    for (const item of editAddedItems) {
+      const itemTotal = parseFloat(item.total.toFixed(2));
+      try {
+        await sb.from('invoice_items').insert({
+          invoice_id: selectedInvoiceId,
+          product_id: item.product_id,
+          name: item.name || '',
+          quantity: item.quantity,
+          price: item.price,
+          cost: 0,
+          total: itemTotal,
+          unit: item.unit || 'box',
+          display_unit: 'Box',
+          uom: 'box',
+          is_foc: 0
+        });
+        // Deduct from truck inventory
+        const invRows = await dbGetByIndex('inventory', 'product_id', item.product_id);
+        if (invRows.length > 0) {
+          invRows[0].quantity = Math.max(0, (invRows[0].quantity||0) - item.quantity);
+          invRows[0].last_updated = new Date().toISOString();
+          await dbPut('inventory', invRows[0]);
+        }
+      } catch(e) { console.warn('New item insert failed:', e.message); }
+      newTotal += itemTotal;
     }
     editAddedItems = [];
   }
 
+  // ── Step 4: Update invoice total ──
   const newDiscount = parseFloat(document.getElementById('edit-inv-discount')?.value) || 0;
   newTotal = parseFloat(newTotal.toFixed(2));
   inv.total_amount = Math.max(0, newTotal - newDiscount);
   inv.discount = newDiscount;
 
-  // Payment type
   const newPayType = document.getElementById('edit-payment-type')?.value || inv.payment_type;
   const oldPayType = inv.payment_type;
   inv.payment_type = newPayType;
@@ -3447,14 +3459,11 @@ async function saveEditedInvoice() {
     inv.cash_paid = 0;
   }
 
-  // Update customer credit if payment type changed
   if (oldPayType !== newPayType && inv.customer_id) {
     const cust = await dbGet('customers', inv.customer_id);
     if (cust) {
       if (oldPayType === 'credit') cust.credit_balance = Math.max(0, (cust.credit_balance||0) - newTotal);
-      if (oldPayType === 'partial') cust.credit_balance = Math.max(0, (cust.credit_balance||0) - (newTotal - (inv.cash_paid||0)));
       if (newPayType === 'credit') cust.credit_balance = (cust.credit_balance||0) + newTotal;
-      if (newPayType === 'partial') cust.credit_balance = (cust.credit_balance||0) + (newTotal - (parseFloat(document.getElementById('edit-cash-paid')?.value)||0));
       cust.credit_balance = Math.max(0, cust.credit_balance||0);
       await dbPut('customers', cust);
     }
