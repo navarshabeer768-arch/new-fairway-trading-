@@ -3163,25 +3163,25 @@ async function editInvoice() {
   let itemsHtml = items.map((it, i) => {
     const p = prodMap[it.product_id];
     const cpb = p ? getCasesPerBox(p) : 4;
-    const pricePerBag = parseFloat(it.price || 0); // stored as per-bag
-    const pricePerBox = pricePerBag * cpb;
+    const pricePerBox = parseFloat(it.price || 0); // stored as price per BOX
+    const pricePerBag = pricePerBox / cpb;
     const bags = parseInt(it.quantity || 0);
     const boxes = Math.floor(bags / cpb);
     const remBags = bags % cpb;
     const qtyDisplay = boxes > 0 ? (boxes + ' box' + (boxes!==1?'es':'') + (remBags>0?' + '+remBags+' bag'+(remBags!==1?'s':''):'')) : (bags + ' bag' + (bags!==1?'s':''));
-    const itemTotal = bags * pricePerBag;
+    const itemTotal = parseFloat(it.total || (bags * pricePerBag));
     return `<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--surface2);border-radius:8px;margin-bottom:6px;">
       <div style="flex:1;">
         <div style="font-size:.85rem;font-weight:600;">${p?.name||'?'}</div>
-        <div style="font-size:.72rem;color:var(--text2);">${qtyDisplay} · QR ${pricePerBag.toFixed(3)}/bag</div>
+        <div style="font-size:.72rem;color:var(--text2);">${qtyDisplay} · QR ${pricePerBox.toFixed(2)}/box (QR ${pricePerBag.toFixed(3)}/bag)</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
         <span style="font-size:.65rem;color:var(--text2);">bags</span>
-        <input type="number" value="${bags}" min="0" style="width:60px;padding:6px;border:1px solid var(--border);border-radius:6px;text-align:center;font-weight:700;" data-item-id="${it.item_id||it.id}" data-product-id="${it.product_id}" data-old-qty="${bags}" data-price="${pricePerBag}" class="edit-item-qty" oninput="updateEditTotal()">
+        <input type="number" value="${bags}" min="0" style="width:60px;padding:6px;border:1px solid var(--border);border-radius:6px;text-align:center;font-weight:700;" data-item-id="${it.item_id||it.id}" data-product-id="${it.product_id}" data-old-qty="${bags}" data-price-per-box="${pricePerBox}" data-cpb="${cpb}" data-price="${pricePerBag}" class="edit-item-qty" oninput="updateEditTotal()">
       </div>
-      <span style="font-size:.85rem;font-weight:700;min-width:70px;text-align:right;">${fmtMoney(itemTotal)}</span>
+      <span style="font-size:.85rem;font-weight:700;min-width:70px;text-align:right;" id="edit-item-total-${it.item_id||it.id||i}">${fmtMoney(itemTotal)}</span>
     </div>`;
-  }).join('') + `<div style="padding:8px;text-align:right;font-size:.9rem;font-weight:800;color:var(--navy);">Current total: <span id="edit-running-total">${fmtMoney(items.reduce((a,it)=>a+(parseInt(it.quantity||0)*parseFloat(it.price||0)),0))}</span></div>`;
+  }).join('') + `<div style="padding:8px;text-align:right;font-size:.9rem;font-weight:800;color:var(--navy);">Current total: <span id="edit-running-total">${fmtMoney(items.reduce((a,it)=>a+parseFloat(it.total||0),0))}</span></div>`;
   // Add product selector
   const productOptions = prods.sort((a,b)=>a.name.localeCompare(b.name)).map(p => `<option value="${p.product_id}" data-price="${p.selling_price}" data-unit="${p.unit||''}">${p.name} — ${fmtMoney(p.selling_price)}</option>`).join('');
   document.getElementById('edit-inv-content').innerHTML = `
@@ -3313,10 +3313,10 @@ function updateEditTotal() {
   let total = 0;
   document.querySelectorAll('.edit-item-qty').forEach(input => {
     const qty = parseInt(input.value) || 0;
-    const price = parseFloat(input.getAttribute('data-price')) || 0;
-    total += qty * price;
+    // data-price is already price-per-bag (pricePerBox / cpb)
+    const pricePerBag = parseFloat(input.getAttribute('data-price')) || 0;
+    total += qty * pricePerBag;
   });
-  // Add new items
   if (typeof editAddedItems !== 'undefined') {
     editAddedItems.forEach(item => { total += item.total || 0; });
   }
@@ -3339,13 +3339,14 @@ async function saveEditedInvoice() {
     const itemId = parseInt(input.getAttribute('data-item-id'));
     const productId = parseInt(input.getAttribute('data-product-id'));
     const oldQty = parseInt(input.getAttribute('data-old-qty')) || 0;
-    const price = parseFloat(input.getAttribute('data-price')) || 0; // price per bag
+    const pricePerBag = parseFloat(input.getAttribute('data-price')) || 0; // per-bag (pricePerBox/cpb)
+    const pricePerBox = parseFloat(input.getAttribute('data-price-per-box')) || 0;
+    const cpb = parseInt(input.getAttribute('data-cpb')) || 4;
     const newQty = parseInt(input.value) || 0;
     const oldItem = oldItems.find(i => i.item_id === itemId || i.id === itemId);
     if (!oldItem) continue;
 
     const diff = newQty - oldQty;
-    // Update truck inventory
     if (diff !== 0) {
       const invRows = await dbGetByIndex('inventory', 'product_id', productId);
       if (invRows.length > 0) {
@@ -3359,9 +3360,9 @@ async function saveEditedInvoice() {
       await dbDelete('invoice_items', itemId);
     } else {
       oldItem.quantity = newQty;
-      // price stored on item is per-bag price
-      const itemPrice = parseFloat(oldItem.price || price) || 0;
-      oldItem.total = parseFloat((newQty * itemPrice).toFixed(2));
+      // Preserve original per-box price in DB, recalculate total as bags × perBagPrice
+      oldItem.price = pricePerBox || parseFloat(oldItem.price || 0);
+      oldItem.total = parseFloat((newQty * pricePerBag).toFixed(2));
       await dbPut('invoice_items', oldItem);
       newTotal += oldItem.total;
     }
@@ -3370,12 +3371,13 @@ async function saveEditedInvoice() {
   // Add new items
   if (typeof editAddedItems !== 'undefined' && editAddedItems.length > 0) {
     for (const item of editAddedItems) {
+      const itemCpb = parseInt(item.cpb) || 4;
       const newItem = {
         invoice_id: selectedInvoiceId,
         product_id: item.product_id,
         name: item.name || '',
-        quantity: item.quantity,
-        price: parseFloat((item.price / (parseInt(item.cpb)||4)).toFixed(4)), // store per-bag price
+        quantity: item.quantity,        // bags
+        price: item.price,              // per-box price (same as how POS stores it)
         cost: 0,
         total: parseFloat(item.total.toFixed(2)),
         display_unit: item.unit || 'box',
