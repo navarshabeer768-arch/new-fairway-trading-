@@ -124,13 +124,102 @@ tr:hover td{background:#f8f9ff;}
 /* PRINT */
 @media print{.sidebar,.topbar,.filters,.btn,.modal-overlay{display:none!important;} .main{margin-left:0!important;} .content{padding:0!important;}}
 
-/* RESPONSIVE */
-@media(max-width:1200px){.stat-grid{grid-template-columns:repeat(2,1fr);} .chart-grid{grid-template-columns:1fr;}}
+/* RESPONSIVE — tablet */
+@media(max-width:1200px){
+  .stat-grid{grid-template-columns:repeat(2,1fr);}
+  .chart-grid{grid-template-columns:1fr;}
+}
+
+/* RESPONSIVE — mobile */
+@media(max-width:768px){
+  :root{--sidebar:0px;}
+
+  /* Sidebar becomes a slide-in drawer */
+  .sidebar{
+    width:260px;
+    transform:translateX(-100%);
+    transition:transform .25s ease;
+    z-index:300;
+    box-shadow:4px 0 20px rgba(0,0,0,.3);
+  }
+  .sidebar.open{transform:translateX(0);}
+
+  /* Overlay behind open sidebar */
+  .sidebar-backdrop{
+    display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:299;
+  }
+  .sidebar-backdrop.open{display:block;}
+
+  /* Main takes full width */
+  .main{margin-left:0;}
+
+  /* Topbar: show hamburger, tighten layout */
+  .topbar{padding:10px 14px;flex-wrap:wrap;gap:8px;}
+  .topbar-title{font-size:15px;}
+  .topbar-sub{font-size:11px;}
+  .topbar-right{gap:6px;flex-wrap:wrap;}
+  .sync-status{display:none;}
+  .sync-btn{padding:7px 12px;font-size:12px;}
+  .hamburger{display:flex !important;}
+
+  /* Content padding */
+  .content{padding:14px;}
+
+  /* Stat grid */
+  .stat-grid{grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;}
+  .stat-val{font-size:18px;}
+  .stat-card{padding:12px;}
+
+  /* Filters: stack vertically */
+  .filters{flex-direction:column;align-items:stretch;gap:8px;}
+  .filter-group{flex-wrap:wrap;}
+
+  /* Tables: horizontal scroll */
+  .card-body{overflow-x:auto;}
+  table{min-width:480px;}
+  th,td{padding:8px 10px;font-size:12px;}
+
+  /* Modal full-width */
+  .modal{width:100%;max-width:100vw;border-radius:12px 12px 0 0;position:fixed;bottom:0;left:0;right:0;max-height:92vh;padding:20px 16px;}
+  .modal-overlay{align-items:flex-end;}
+
+  /* Form rows: single column */
+  .form-row{grid-template-columns:1fr;}
+  .form-row.three{grid-template-columns:1fr;}
+
+  /* Balance sheet, cost analysis grids */
+  .content div[style*="grid-template-columns:1fr 1fr"]{
+    grid-template-columns:1fr !important;
+  }
+
+  /* Page-specific grids */
+  #page-dashboard .stat-grid{grid-template-columns:1fr 1fr;}
+  .chart-grid{grid-template-columns:1fr !important;}
+
+  /* Tabs: scrollable */
+  .tabs{overflow-x:auto;flex-wrap:nowrap;white-space:nowrap;}
+  .tab{padding:8px 14px;font-size:12px;}
+
+  /* Buttons */
+  .btn{padding:8px 14px;font-size:12px;}
+  .btn-sm{padding:5px 10px;font-size:11px;}
+}
+
+/* Hamburger button — hidden on desktop */
+.hamburger{
+  display:none;
+  background:none;border:none;cursor:pointer;
+  padding:4px 8px;border-radius:6px;
+  flex-direction:column;gap:4px;align-items:center;justify-content:center;
+}
+.hamburger span{display:block;width:20px;height:2px;background:var(--navy);border-radius:2px;transition:all .2s;}
+
 </style>
 </head>
 <body>
 
 <!-- PIN SCREEN -->
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="closeSidebar()"></div>
 <div id="pin-screen" style="position:fixed;inset:0;background:linear-gradient(160deg,#1a237e 0%,#283593 60%,#3949ab 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;padding:32px 24px;">
   <div style="text-align:center;margin-bottom:32px;">
     <div style="font-size:40px;margin-bottom:12px;">💼</div>
@@ -191,9 +280,14 @@ tr:hover td{background:#f8f9ff;}
 <!-- MAIN -->
 <div class="main">
   <div class="topbar">
-    <div>
-      <div class="topbar-title" id="page-title">Dashboard</div>
-      <div class="topbar-sub" id="page-sub">Financial Overview</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <button class="hamburger" id="hamburger-btn" onclick="toggleSidebar()" aria-label="Menu">
+        <span></span><span></span><span></span>
+      </button>
+      <div>
+        <div class="topbar-title" id="page-title">Dashboard</div>
+        <div class="topbar-sub" id="page-sub">Financial Overview</div>
+      </div>
     </div>
     <div class="topbar-right">
       <span class="sync-status" id="sync-status">Last sync: —</span>
@@ -1329,6 +1423,17 @@ const pageTitles = {
   accounts: ['Chart of Accounts', 'All ledger accounts and opening balances'],
 };
 
+function toggleSidebar() {
+  const sidebar = document.querySelector('.sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  sidebar.classList.toggle('open');
+  backdrop.classList.toggle('open');
+}
+function closeSidebar() {
+  document.querySelector('.sidebar').classList.remove('open');
+  document.getElementById('sidebar-backdrop').classList.remove('open');
+}
+
 function showPage(page, el) {
   try {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -1342,6 +1447,8 @@ function showPage(page, el) {
     document.getElementById('page-title').textContent = title;
     document.getElementById('page-sub').textContent = sub;
     loadCurrentPage(page);
+    // Auto-close sidebar on mobile after navigation
+    if (window.innerWidth <= 768) closeSidebar();
   } catch(e) { console.error('showPage error:', e.message); }
 }
 
