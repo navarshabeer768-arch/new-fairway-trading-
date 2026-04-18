@@ -380,24 +380,30 @@ tr:hover td{background:#f8f9ff;}
     <!-- CUSTOMER LEDGER -->
     <div class="page" id="page-ledger">
       <div class="filters">
+        <div class="filter-group"><span class="filter-label">View:</span>
+          <select class="form-select" id="ledger-view" style="width:160px;" onchange="loadLedger()">
+            <option value="ranking">📊 Sales Ranking</option>
+            <option value="statement">📋 Statement</option>
+            <option value="monthly">📅 Monthly Avg</option>
+          </select>
+        </div>
         <div class="filter-group"><span class="filter-label">Customer:</span>
-          <select class="form-select" id="ledger-customer" style="width:200px;" onchange="loadLedger()">
+          <select class="form-select" id="ledger-customer" style="width:180px;" onchange="loadLedger()">
             <option value="">All Customers</option>
           </select>
         </div>
-        <div class="filter-group"><span class="filter-label">From:</span><input type="date" class="form-input" id="ledger-from" style="width:150px;"></div>
-        <div class="filter-group"><span class="filter-label">To:</span><input type="date" class="form-input" id="ledger-to" style="width:150px;"></div>
+        <div class="filter-group"><span class="filter-label">From:</span><input type="date" class="form-input" id="ledger-from" style="width:140px;"></div>
+        <div class="filter-group"><span class="filter-label">To:</span><input type="date" class="form-input" id="ledger-to" style="width:140px;"></div>
         <button class="btn btn-outline btn-sm" onclick="loadLedger()">Filter</button>
+        <button class="btn btn-outline btn-sm" onclick="window.print()">🖨️ Print</button>
       </div>
-      <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);">
+      <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);">
         <div class="stat-card green"><div class="stat-label">Total Sales</div><div class="stat-val green" id="led-sales">QR 0</div></div>
         <div class="stat-card gold"><div class="stat-label">Total Collections</div><div class="stat-val gold" id="led-collect">QR 0</div></div>
         <div class="stat-card red"><div class="stat-label">Outstanding Balance</div><div class="stat-val red" id="led-balance">QR 0</div></div>
+        <div class="stat-card navy"><div class="stat-label">Avg Monthly Sales</div><div class="stat-val navy" id="led-avg">QR 0</div></div>
       </div>
-      <div class="card">
-        <div class="card-header"><div class="card-title">Customer Ledger</div></div>
-        <div class="card-body"><table><thead><tr><th>Date</th><th>Customer</th><th>Invoice #</th><th>Debit (Sales)</th><th>Credit (Payment)</th><th>Balance</th></tr></thead><tbody id="ledger-list"></tbody></table></div>
-      </div>
+      <div id="ledger-content"></div>
     </div>
 
     <!-- AGING REPORT -->
@@ -1660,7 +1666,9 @@ function loadBalanceSheet() {
 
   // ── EQUITY ──
   const totalRevenue = invs.reduce((a,i) => a+parseFloat(i.total_amount||0), 0);
-  const totalCOGS = getPurchaseOrders().filter(p => p.date<=asOf).reduce((a,p) => a+p.amount, 0) + importCostsPaid;
+  // COGS = Total Purchases - Remaining Inventory Value (what was actually sold)
+  const totalPurchaseCost = getPurchaseOrders().filter(p => p.date<=asOf).reduce((a,p) => a+p.amount, 0);
+  const totalCOGS = Math.max(0, totalPurchaseCost + importCostsPaid - inventoryValue);
   const totalAllExp = totalSalaries + totalExp + posExp;
   const retainedEarnings = totalRevenue - totalCOGS - totalAllExp - drawings;
   const ownerCapital = chartAccounts.filter(a => a.type==='equity').reduce((a,x) => a+parseFloat(x.opening_balance||0), 0);
@@ -1707,7 +1715,7 @@ function loadBalanceSheet() {
             <tr><td style="padding:6px 0;">Owner Capital</td><td style="text-align:right;">${fmt(ownerCapital)}</td></tr>
             <tr><td style="padding:6px 0;">Retained Earnings / Net Profit</td><td style="text-align:right;color:${retainedEarnings>=0?'var(--green)':'var(--red)'};">${fmt(retainedEarnings)}</td></tr>
             <tr><td style="padding:6px 0;">Revenue (Period)</td><td style="text-align:right;">${fmt(totalRevenue)}</td></tr>
-            <tr><td style="padding:6px 0;color:var(--red);">Less: COGS</td><td style="text-align:right;color:var(--red);">- ${fmt(totalCOGS)}</td></tr>
+            <tr><td style="padding:6px 0;color:var(--red);">Less: COGS (Purchases - Stock)</td><td style="text-align:right;color:var(--red);">- ${fmt(totalCOGS)}</td></tr>
             <tr><td style="padding:6px 0;color:var(--red);">Less: Operating Expenses</td><td style="text-align:right;color:var(--red);">- ${fmt(totalAllExp)}</td></tr>
             <tr><td style="padding:6px 0;color:var(--gold);">Less: Owner Drawings</td><td style="text-align:right;color:var(--gold);">- ${fmt(drawings)}</td></tr>
             ${chartAccounts.filter(a=>a.type==='equity'&&a.opening_balance>0).map(a=>`<tr><td style="padding:4px 0;">${a.name}</td><td style="text-align:right;">${fmt(a.opening_balance)}</td></tr>`).join('')}
@@ -1941,37 +1949,166 @@ function saveBankTx() {
 }
 
 // ═══════════════════════════════════════════
-// CUSTOMER LEDGER
+// CUSTOMER LEDGER & ANALYTICS
 // ═══════════════════════════════════════════
 function loadLedger() {
+  const view = document.getElementById('ledger-view')?.value || 'ranking';
   const custId = document.getElementById('ledger-customer').value;
-  const from = document.getElementById('ledger-from').value || monthStart();
+  const from = document.getElementById('ledger-from').value || '2000-01-01';
   const to = document.getElementById('ledger-to').value || today();
   const custMap = {}; posData.customers.forEach(c => custMap[c.customer_id] = c);
+
   let invs = posData.invoices.filter(i => i.date >= from && i.date <= to);
   if (custId) invs = invs.filter(i => String(i.customer_id) === custId);
-  const totalSales = invs.reduce((a, i) => a + (i.total_amount || 0), 0);
-  const totalCredit = invs.filter(i => i.payment_type === 'credit').reduce((a, i) => a + (i.total_amount || 0), 0);
-  const totalCash = totalSales - totalCredit;
+
+  const totalSales = invs.reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
+  const totalCredit = invs.filter(i=>i.payment_type==='credit').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
+  const totalPartialCredit = invs.filter(i=>i.payment_type==='partial').reduce((a,i)=>a+(parseFloat(i.total_amount||0)-parseFloat(i.cash_paid||0)),0);
+  const outstanding = totalCredit + totalPartialCredit;
+  const collected = totalSales - outstanding;
+
+  // Monthly average
+  const months = new Set(invs.map(i=>i.date.slice(0,7)));
+  const monthCount = Math.max(1, months.size);
+  const avgMonthly = totalSales / monthCount;
+
   document.getElementById('led-sales').textContent = fmt(totalSales);
-  document.getElementById('led-collect').textContent = fmt(totalCash);
-  document.getElementById('led-balance').textContent = fmt(totalCredit);
-  let balance = 0;
-  document.getElementById('ledger-list').innerHTML = invs.sort((a, b) => a.date.localeCompare(b.date)).map(inv => {
-    const isCredit = inv.payment_type === 'credit' || inv.payment_type === 'partial';
-    const creditAmt = inv.payment_type === 'credit' ? inv.total_amount : inv.payment_type === 'partial' ? (inv.total_amount - inv.cash_paid) : 0;
-    const debit = inv.total_amount;
-    const credit = inv.total_amount - creditAmt;
-    balance += creditAmt;
-    const cust = custMap[inv.customer_id];
-    return `<tr>
-      <td>${inv.date}</td><td>${cust?.name || 'Walk-in'}</td>
-      <td>#${String(inv.invoice_id).padStart(4,'0')}</td>
-      <td style="color:var(--navy);font-weight:700;">${fmt(debit)}</td>
-      <td style="color:var(--green);">${fmt(credit)}</td>
-      <td style="font-weight:700;color:${balance > 0 ? 'var(--red)' : 'var(--green)'};">${fmt(balance)}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:#999;">No data</td></tr>';
+  document.getElementById('led-collect').textContent = fmt(collected);
+  document.getElementById('led-balance').textContent = fmt(outstanding);
+  document.getElementById('led-avg').textContent = fmt(avgMonthly);
+
+  const container = document.getElementById('ledger-content');
+  if (!container) return;
+
+  if (view === 'ranking') {
+    // ── Sales Ranking by customer ──
+    const byCustomer = {};
+    invs.forEach(inv => {
+      const id = inv.customer_id || 'walkin';
+      if (!byCustomer[id]) byCustomer[id] = { name: custMap[id]?.name || 'Walk-in', total:0, count:0, credit:0, cash:0, cheque:0 };
+      byCustomer[id].total += parseFloat(inv.total_amount||0);
+      byCustomer[id].count++;
+      if (inv.payment_type==='credit') byCustomer[id].credit += parseFloat(inv.total_amount||0);
+      else if (inv.payment_type==='cheque') byCustomer[id].cheque += parseFloat(inv.total_amount||0);
+      else byCustomer[id].cash += parseFloat(inv.total_amount||0);
+    });
+    const ranked = Object.entries(byCustomer).sort((a,b)=>b[1].total-a[1].total);
+    const maxSale = ranked[0]?.[1].total || 1;
+
+    container.innerHTML = `<div class="card">
+      <div class="card-header"><div class="card-title">🏆 Customer Sales Ranking</div><div style="font-size:12px;color:var(--text2);">${from} to ${to}</div></div>
+      <div class="card-body">
+        <table>
+          <thead><tr><th>#</th><th>Customer</th><th style="text-align:center;">Invoices</th><th style="text-align:right;">Cash</th><th style="text-align:right;">Credit</th><th style="text-align:right;">Total Sales</th><th style="text-align:right;">Share</th></tr></thead>
+          <tbody>
+            ${ranked.map(([id, d], idx) => `<tr>
+              <td><strong style="color:${idx<3?'var(--gold)':'var(--text2)'};">${idx===0?'🥇':idx===1?'🥈':idx===2?'🥉':'#'+(idx+1)}</strong></td>
+              <td><strong>${d.name}</strong>
+                <div style="height:4px;background:var(--border);border-radius:2px;margin-top:4px;width:100%;"><div style="height:4px;background:${idx===0?'var(--gold)':idx===1?'var(--navy)':'var(--green)'};border-radius:2px;width:${(d.total/maxSale*100).toFixed(0)}%;"></div></div>
+              </td>
+              <td style="text-align:center;">${d.count}</td>
+              <td style="text-align:right;color:var(--green);">${fmt(d.cash+d.cheque)}</td>
+              <td style="text-align:right;color:var(--red);">${fmt(d.credit)}</td>
+              <td style="text-align:right;font-weight:800;font-size:14px;">${fmt(d.total)}</td>
+              <td style="text-align:right;color:var(--text2);">${totalSales>0?(d.total/totalSales*100).toFixed(1):0}%</td>
+            </tr>`).join('')}
+          </tbody>
+          <tfoot><tr style="font-weight:900;background:#f8f9ff;"><td colspan="4"></td><td style="text-align:right;padding:10px;">TOTAL</td><td style="text-align:right;padding:10px;font-size:15px;">${fmt(totalSales)}</td><td style="text-align:right;">100%</td></tr></tfoot>
+        </table>
+      </div>
+    </div>`;
+
+  } else if (view === 'monthly') {
+    // ── Monthly breakdown ──
+    const byMonth = {};
+    invs.forEach(inv => {
+      const m = inv.date.slice(0,7);
+      if (!byMonth[m]) byMonth[m] = { total:0, count:0, customers:new Set() };
+      byMonth[m].total += parseFloat(inv.total_amount||0);
+      byMonth[m].count++;
+      if (inv.customer_id) byMonth[m].customers.add(inv.customer_id);
+    });
+    const monthList = Object.entries(byMonth).sort((a,b)=>a[0].localeCompare(b[0]));
+    const grandTotal = monthList.reduce((a,[,v])=>a+v.total,0);
+    const grandAvg = grandTotal / Math.max(1, monthList.length);
+
+    // Per-customer monthly breakdown
+    const custMonthly = {};
+    invs.forEach(inv => {
+      const id = inv.customer_id || 'walkin';
+      const m = inv.date.slice(0,7);
+      if (!custMonthly[id]) custMonthly[id] = { name: custMap[id]?.name||'Walk-in', months:{}, total:0 };
+      custMonthly[id].months[m] = (custMonthly[id].months[m]||0) + parseFloat(inv.total_amount||0);
+      custMonthly[id].total += parseFloat(inv.total_amount||0);
+    });
+    const custList = Object.values(custMonthly).sort((a,b)=>b.total-a.total);
+    const allMonths = [...new Set(invs.map(i=>i.date.slice(0,7)))].sort();
+
+    container.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-header"><div class="card-title">📅 Monthly Sales Summary</div></div>
+      <div class="card-body"><table>
+        <thead><tr><th>Month</th><th style="text-align:center;">Invoices</th><th style="text-align:center;">Customers</th><th style="text-align:right;">Sales</th><th style="text-align:right;">vs Avg</th></tr></thead>
+        <tbody>
+          ${monthList.map(([m,d])=>{
+            const label = new Date(m+'-01').toLocaleString('default',{month:'short',year:'numeric'});
+            const vsAvg = d.total - grandAvg;
+            return `<tr>
+              <td><strong>${label}</strong></td>
+              <td style="text-align:center;">${d.count}</td>
+              <td style="text-align:center;">${d.customers.size}</td>
+              <td style="text-align:right;font-weight:700;">${fmt(d.total)}</td>
+              <td style="text-align:right;color:${vsAvg>=0?'var(--green)':'var(--red)'};">${vsAvg>=0?'+':''}${fmt(vsAvg)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+        <tfoot>
+          <tr style="background:#f0fff4;font-weight:900;"><td>TOTAL</td><td style="text-align:center;">${invs.length}</td><td></td><td style="text-align:right;">${fmt(grandTotal)}</td><td style="text-align:right;color:var(--navy);">Avg: ${fmt(grandAvg)}/mo</td></tr>
+        </tfoot>
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">👤 Customer Monthly Breakdown</div></div>
+      <div class="card-body" style="overflow-x:auto;"><table>
+        <thead><tr><th>Customer</th>${allMonths.map(m=>`<th style="text-align:right;font-size:11px;">${new Date(m+'-01').toLocaleString('default',{month:'short',year:'2-digit'})}</th>`).join('')}<th style="text-align:right;">Total</th><th style="text-align:right;">Avg/Mo</th></tr></thead>
+        <tbody>
+          ${custList.map(d=>`<tr>
+            <td><strong>${d.name}</strong></td>
+            ${allMonths.map(m=>`<td style="text-align:right;font-size:12px;">${d.months[m]?fmt(d.months[m]).replace('QR ',''):'—'}</td>`).join('')}
+            <td style="text-align:right;font-weight:800;">${fmt(d.total)}</td>
+            <td style="text-align:right;color:var(--navy);">${fmt(d.total/Math.max(1,allMonths.length))}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>`;
+
+  } else {
+    // ── Statement view ──
+    let balance = 0;
+    const rows = invs.sort((a,b)=>a.date.localeCompare(b.date)).map(inv => {
+      const creditAmt = inv.payment_type==='credit' ? parseFloat(inv.total_amount||0) : inv.payment_type==='partial' ? (parseFloat(inv.total_amount||0)-parseFloat(inv.cash_paid||0)) : 0;
+      const debit = parseFloat(inv.total_amount||0);
+      const credit = debit - creditAmt;
+      balance += creditAmt;
+      const cust = custMap[inv.customer_id];
+      return `<tr>
+        <td>${inv.date}</td><td>${cust?.name||'Walk-in'}</td>
+        <td>#${String(inv.invoice_id).padStart(4,'0')}</td>
+        <td><span class="badge badge-${inv.payment_type==='cash'?'green':inv.payment_type==='credit'?'red':'gold'}">${inv.payment_type}</span></td>
+        <td style="color:var(--navy);font-weight:700;">${fmt(debit)}</td>
+        <td style="color:var(--green);">${credit>0?fmt(credit):'—'}</td>
+        <td style="font-weight:700;color:${balance>0?'var(--red)':'var(--green)'};">${fmt(balance)}</td>
+      </tr>`;
+    });
+    container.innerHTML = `<div class="card">
+      <div class="card-header"><div class="card-title">📋 Customer Statement</div></div>
+      <div class="card-body"><table>
+        <thead><tr><th>Date</th><th>Customer</th><th>Invoice #</th><th>Payment</th><th>Debit (Sales)</th><th>Credit (Paid)</th><th>Balance</th></tr></thead>
+        <tbody>${rows.join('')||'<tr><td colspan="7" style="text-align:center;padding:20px;color:#999;">No transactions</td></tr>'}</tbody>
+        <tfoot><tr style="font-weight:900;background:#f8f9ff;"><td colspan="4">TOTALS</td><td style="padding:10px;">${fmt(totalSales)}</td><td style="padding:10px;">${fmt(collected)}</td><td style="padding:10px;color:var(--red);">${fmt(outstanding)}</td></tr></tfoot>
+      </table></div>
+    </div>`;
+  }
 }
 
 // ═══════════════════════════════════════════
