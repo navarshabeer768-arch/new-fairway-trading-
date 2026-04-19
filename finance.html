@@ -3316,71 +3316,129 @@ function applyPurDatePreset() {
 // ═══════════════════════════════════════════
 function loadTrialBalance() {
   const asOf = document.getElementById('trial-date').value || today();
+  const chartAccounts = lsGet('fin_chart_accounts');
 
-  // Collect all accounts and their balances
-  const accounts = lsGet('fin_chart_accounts');
+  // ── Calculated figures from actual data ──
+  const invs = posData.invoices.filter(i => i.date <= asOf);
+  const totalRevenue = invs.reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
 
-  // Auto-calculated balances from data
-  const totalRevenue = posData.invoices.filter(i => i.date <= asOf).reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
-  const totalPurchases = getPurchaseOrders().filter(p => p.date <= asOf).reduce((a,p) => a + p.amount, 0);
-  const totalImport = lsGet('fin_import_costs').filter(c => c.date <= asOf).reduce((a,c) => a + c.amount, 0);
-  const totalSalaries = lsGet(LS.payroll).reduce((a,p) => a + p.net_pay, 0);
-  const totalExpenses = lsGet(LS.transactions).filter(t => t.type==='expense' && t.date <= asOf).reduce((a,t) => a + t.amount, 0);
-  const totalPosExp = posData.expenses.filter(e => e.date <= asOf).reduce((a,e) => a + parseFloat(e.amount||0), 0);
-  const totalAssets = lsGet('fin_assets').filter(a => a.status==='active').reduce((a,x) => a + parseFloat(x.purchase_value||0), 0);
-  const totalReceivables = posData.customers.reduce((a,c) => a + parseFloat(c.credit_balance||0), 0);
-  const totalPayables = getPurchaseOrders().filter(p => p.status==='pending'||p.status==='partial').reduce((a,p) => a + p.amount, 0);
-  const capitalAccounts = accounts.filter(a => a.type === 'equity');
-  const totalCapital = capitalAccounts.reduce((a,x) => a + parseFloat(x.opening_balance||0), 0);
+  // Cash & Bank
+  const cashSales = invs.filter(i=>i.payment_type==='cash').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
+  const chequeSales = invs.filter(i=>i.payment_type==='cheque').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
+  const bankIn = lsGet(LS.bank).filter(b=>b.type==='in'&&b.date<=asOf).reduce((a,b)=>a+b.amount,0);
+  const bankOut = lsGet(LS.bank).filter(b=>b.type==='out'&&b.date<=asOf).reduce((a,b)=>a+b.amount,0);
+  const totalPurchasesPaid = getPurchaseOrders().filter(p=>p.status==='paid'&&p.date<=asOf).reduce((a,p)=>a+p.amount,0);
+  const totalSalaries = lsGet(LS.payroll).reduce((a,p)=>a+p.net_pay,0);
+  const totalExpenses = lsGet(LS.transactions).filter(t=>t.type==='expense'&&t.date<=asOf).reduce((a,t)=>a+t.amount,0);
+  const totalPosExp = posData.expenses.filter(e=>e.date<=asOf).reduce((a,e)=>a+parseFloat(e.amount||0),0);
+  const drawings = lsGet('fin_drawings').reduce((a,d)=>a+d.amount,0);
+  const cashAtHand = Math.max(0, cashSales - totalPurchasesPaid - totalSalaries - totalExpenses - totalPosExp - drawings);
+  const bankBalance = Math.max(0, chequeSales + bankIn - bankOut);
 
-  // Build trial balance rows
-  const rows = [
-    { name: 'Sales Revenue', type: 'income', credit: totalRevenue, debit: 0 },
-    { name: 'Trade Receivables (Debtors)', type: 'asset', credit: 0, debit: totalReceivables },
-    { name: 'Inventory / Stock (Warehouse)', type: 'asset', credit: 0, debit: totalPurchases - totalPurchases * 0 },
-    { name: 'Fixed Assets', type: 'asset', credit: 0, debit: totalAssets },
-    { name: 'Purchases (COGS)', type: 'expense', credit: 0, debit: totalPurchases },
-    { name: 'Import & Extra Costs', type: 'expense', credit: 0, debit: totalImport },
-    { name: 'Salaries & Wages', type: 'expense', credit: 0, debit: totalSalaries },
-    { name: 'Other Expenses', type: 'expense', credit: 0, debit: totalExpenses + totalPosExp },
-    { name: 'Trade Payables (Creditors)', type: 'liability', credit: totalPayables, debit: 0 },
-    ...accounts.map(a => ({
-      name: a.name + (a.code ? ' (' + a.code + ')' : ''),
+  // Receivables & Payables
+  const totalReceivables = posData.customers.reduce((a,c)=>a+parseFloat(c.credit_balance||0),0);
+  const totalPayables = getPurchaseOrders().filter(p=>(p.status==='pending'||p.status==='partial')&&p.date<=asOf).reduce((a,p)=>a+p.amount,0);
+  const accruedSalaries = lsGet(LS.payroll).filter(p=>!p.paid).reduce((a,p)=>a+p.net_pay,0);
+
+  // Inventory (closing stock value)
+  const finProds = lsGet('fin_products');
+  const whMap = {}; posData.warehouse_stock.forEach(w => whMap[w.product_id] = w.quantity||0);
+  const trMap = {}; posData.inventory.forEach(t => trMap[t.product_id] = (trMap[t.product_id]||0)+(t.quantity||0));
+  let inventoryValue = 0;
+  finProds.forEach(p => {
+    const cpb = p.cases_per_box||4;
+    inventoryValue += ((whMap[p.pos_id]||0)+(trMap[p.pos_id]||0)) * ((p.cost_price||0)/cpb);
+  });
+
+  // Fixed Assets (NBV)
+  const fixedAssets = lsGet('fin_assets').filter(a=>a.status==='active');
+  const totalFixedAssets = fixedAssets.reduce((a,ast)=>a+calcCurrentValue(ast),0);
+
+  // COGS = Purchases + Import - Closing Stock
+  const totalPurchases = getPurchaseOrders().filter(p=>p.date<=asOf).reduce((a,p)=>a+p.amount,0);
+  const totalImport = lsGet('fin_import_costs').filter(c=>c.date<=asOf).reduce((a,c)=>a+c.amount,0);
+  const cogs = Math.max(0, totalPurchases + totalImport - inventoryValue);
+
+  // Equity = Revenue - COGS - Expenses - Drawings + Capital
+  const ownerCapital = chartAccounts.filter(a=>a.type==='equity').reduce((a,x)=>a+parseFloat(x.opening_balance||0),0);
+  const retainedEarnings = totalRevenue - cogs - totalSalaries - totalExpenses - totalPosExp - drawings;
+  const totalEquity = ownerCapital + retainedEarnings;
+
+  // ── Build rows — standard double-entry format ──
+  const rows = [];
+
+  // ASSETS (Debit side)
+  if (cashAtHand > 0)       rows.push({ name:'Cash in Hand',              type:'asset',     debit:cashAtHand,       credit:0 });
+  if (bankBalance > 0)      rows.push({ name:'Cash at Bank',              type:'asset',     debit:bankBalance,      credit:0 });
+  if (totalReceivables > 0) rows.push({ name:'Accounts Receivable',       type:'asset',     debit:totalReceivables, credit:0 });
+  if (inventoryValue > 0)   rows.push({ name:'Inventory / Closing Stock', type:'asset',     debit:inventoryValue,   credit:0 });
+  if (totalFixedAssets > 0) rows.push({ name:'Fixed Assets (NBV)',        type:'asset',     debit:totalFixedAssets, credit:0 });
+
+  // EXPENSES (Debit side)
+  if (cogs > 0)             rows.push({ name:'Cost of Goods Sold',        type:'expense',   debit:cogs,             credit:0 });
+  if (totalSalaries > 0)    rows.push({ name:'Salaries & Wages',          type:'expense',   debit:totalSalaries,    credit:0 });
+  const allExp = totalExpenses + totalPosExp;
+  if (allExp > 0)           rows.push({ name:'Operating Expenses',        type:'expense',   debit:allExp,           credit:0 });
+  if (drawings > 0)         rows.push({ name:'Owner Drawings',            type:'expense',   debit:drawings,         credit:0 });
+
+  // LIABILITIES (Credit side)
+  if (totalPayables > 0)    rows.push({ name:'Accounts Payable',          type:'liability', debit:0, credit:totalPayables });
+  if (accruedSalaries > 0)  rows.push({ name:'Accrued Salaries',          type:'liability', debit:0, credit:accruedSalaries });
+
+  // EQUITY (Credit side)
+  if (ownerCapital > 0)     rows.push({ name:'Owner Capital',             type:'equity',    debit:0, credit:ownerCapital });
+  if (Math.abs(retainedEarnings) > 0) rows.push({ name:'Retained Earnings / Net Profit', type:'equity', debit: retainedEarnings<0?Math.abs(retainedEarnings):0, credit:retainedEarnings>0?retainedEarnings:0 });
+
+  // INCOME (Credit side)
+  if (totalRevenue > 0)     rows.push({ name:'Sales Revenue',             type:'income',    debit:0, credit:totalRevenue });
+
+  // Add Chart of Accounts manual entries
+  chartAccounts.filter(a=>parseFloat(a.opening_balance||0)!==0).forEach(a => {
+    const bal = parseFloat(a.opening_balance||0);
+    rows.push({
+      name: a.name + (a.code?' ('+a.code+')':''),
       type: a.type,
-      debit: ['asset','expense'].includes(a.type) ? parseFloat(a.opening_balance||0) : 0,
-      credit: ['liability','equity','income'].includes(a.type) ? parseFloat(a.opening_balance||0) : 0
-    }))
-  ].filter(r => r.debit > 0 || r.credit > 0);
+      debit:  ['asset','expense'].includes(a.type) ? bal : 0,
+      credit: ['liability','equity','income'].includes(a.type) ? bal : 0
+    });
+  });
 
-  const totalDebit = rows.reduce((a,r) => a + r.debit, 0);
-  const totalCredit = rows.reduce((a,r) => a + r.credit, 0);
-  const typeColors = { asset:'var(--navy)', liability:'var(--red)', equity:'var(--green)', income:'var(--green)', expense:'var(--red)' };
+  const totalDebit  = rows.reduce((a,r)=>a+r.debit,0);
+  const totalCredit = rows.reduce((a,r)=>a+r.credit,0);
+  const diff = Math.abs(totalDebit - totalCredit);
+  const balanced = diff < 1;
+
+  const typeColor = { asset:'badge-blue', liability:'badge-red', equity:'badge-green', income:'badge-green', expense:'badge-red' };
 
   document.getElementById('trial-content').innerHTML = `
     <div class="card">
       <div class="card-header">
         <div class="card-title">Trial Balance — as of ${asOf}</div>
-        <div style="font-size:12px;color:var(--text2);">New Fair Way Trading</div>
+        <div style="font-size:12px;color:var(--text2);">New Fair Way Trading · Doha, Qatar</div>
       </div>
       <div class="card-body">
         <table>
           <thead><tr><th>Account</th><th>Type</th><th style="text-align:right;">Debit (QR)</th><th style="text-align:right;">Credit (QR)</th></tr></thead>
           <tbody>
-            ${rows.map(r => `<tr>
+            ${rows.map(r=>`<tr>
               <td style="font-weight:600;">${r.name}</td>
-              <td><span class="badge badge-blue" style="font-size:10px;text-transform:capitalize;">${r.type}</span></td>
-              <td style="text-align:right;font-weight:600;">${r.debit > 0 ? fmt(r.debit) : '—'}</td>
-              <td style="text-align:right;font-weight:600;">${r.credit > 0 ? fmt(r.credit) : '—'}</td>
+              <td><span class="badge ${typeColor[r.type]||'badge-blue'}" style="font-size:10px;text-transform:capitalize;">${r.type}</span></td>
+              <td style="text-align:right;font-weight:600;">${r.debit>0?fmt(r.debit):'—'}</td>
+              <td style="text-align:right;font-weight:600;">${r.credit>0?fmt(r.credit):'—'}</td>
             </tr>`).join('')}
           </tbody>
           <tfoot>
-            <tr style="font-weight:900;background:${Math.abs(totalDebit-totalCredit)<0.01?'#e8f5e9':'#ffebee'};">
-              <td colspan="2" style="padding:12px;font-size:14px;">TOTALS ${Math.abs(totalDebit-totalCredit)<0.01?'✅ Balanced':'⚠️ Difference: '+fmt(Math.abs(totalDebit-totalCredit))}</td>
-              <td style="text-align:right;padding:12px;font-size:14px;">${fmt(totalDebit)}</td>
-              <td style="text-align:right;padding:12px;font-size:14px;">${fmt(totalCredit)}</td>
+            <tr style="font-weight:900;font-size:14px;background:${balanced?'#e8f5e9':'#fff8e1'};">
+              <td colspan="2" style="padding:12px;">${balanced?'✅ Balanced':'⚠️ Difference: '+fmt(diff)+' — add opening balances in Chart of Accounts'}</td>
+              <td style="text-align:right;padding:12px;">${fmt(totalDebit)}</td>
+              <td style="text-align:right;padding:12px;">${fmt(totalCredit)}</td>
             </tr>
           </tfoot>
         </table>
+      </div>
+      <div style="padding:14px 18px;font-size:12px;color:var(--text2);border-top:1px solid var(--border);">
+        💡 To balance: go to <strong>Chart of Accounts</strong> and enter the owner's capital / opening balances.
+        Current equity: ${fmt(totalEquity)} &nbsp;|&nbsp; Revenue: ${fmt(totalRevenue)} &nbsp;|&nbsp; COGS: ${fmt(cogs)}
       </div>
     </div>`;
 }
