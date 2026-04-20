@@ -2388,6 +2388,15 @@ async function completeOrder() {
       const _truckStock = await loadTruckStock(_saleOwner);
       _truckStock[item.product_id] = Math.max(0, (_truckStock[item.product_id] || 0) - bagsToDeduct);
       await saveTruckStock(_saleOwner, _truckStock);
+      // Also deduct from warehouse_stock in Supabase (so Finance shows correct stock)
+      try {
+        const { data: whSale } = await sb.from('warehouse_stock').select('quantity').eq('product_id', item.product_id);
+        if (whSale && whSale.length > 0) {
+          const newWHQty = Math.max(0, parseFloat(whSale[0].quantity || 0) - bagsToDeduct);
+          await sb.from('warehouse_stock').update({ quantity: newWHQty, last_updated: new Date().toISOString() }).eq('product_id', item.product_id);
+          delete localCache['warehouse_stock'];
+        }
+      } catch(e) { console.warn('WH sale deduct failed:', e.message); }
     }
     // Update customer credit
     if (custId && (payType === 'credit' || payType === 'partial')) {
