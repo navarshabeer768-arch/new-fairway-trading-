@@ -383,8 +383,8 @@ input[type=number]{-moz-appearance:textfield;}
       <div class="sum-val" id="hs-profit">QR 0</div>
       <div class="sum-lbl">Profit</div>
     </div>
-    <div class="sum-card" id="hs-target-card" style="display:none;">
-      <div class="sum-val" id="hs-target-val" style="font-size:1rem;">—</div>
+    <div class="sum-card" id="hs-target-card">
+      <div class="sum-val" id="hs-target-val" style="font-size:1rem;color:#ffd700;">—</div>
       <div class="sum-lbl">🎯 Target</div>
     </div>
   </div>
@@ -6079,30 +6079,68 @@ async function loadTruckScreen() {
     const whFmt = fmtStock(whQty, cpb);
     const imgHtml = p.photo ? `<img class="inv-photo" src="${p.photo}" alt="${p.name}">` : `<div class="inv-photo-placeholder">${p.icon||'📦'}</div>`;
     const truckColor = truckQty <= 0 ? 'color-red' : truckQty <= (p.low_stock_threshold||10) ? 'color-gold' : 'color-navy';
-    return `<div class="card" style="margin-bottom:8px;">
-      <div style="display:flex;align-items:center;gap:10px;">
-        ${imgHtml}
-        <div style="flex:1;">
-          <div style="font-weight:700;font-size:.95rem;">${p.name}</div>
-          <div style="font-size:.75rem;color:var(--text2);">${p.category} · ${cpb} cases/box</div>
-          <div style="display:flex;gap:16px;margin-top:6px;">
-            <div style="text-align:center;">
-              <div style="font-size:.95rem;font-weight:900;" class="${truckColor}">${truckFmt}</div>
-              <div style="font-size:.65rem;color:var(--text2);">🚛 Truck</div>
-            </div>
-            <div style="text-align:center;">
-              <div style="font-size:.95rem;font-weight:900;color:var(--green);">${whFmt}</div>
-              <div style="font-size:.65rem;color:var(--text2);">🏭 Warehouse</div>
+
+    if (isAdmin()) {
+      // Admin: direct load button
+      return `<div class="card" style="margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          ${imgHtml}
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:.95rem;">${p.name}</div>
+            <div style="font-size:.75rem;color:var(--text2);">${p.category} · ${cpb} cases/box</div>
+            <div style="display:flex;gap:16px;margin-top:6px;">
+              <div style="text-align:center;"><div style="font-size:.95rem;font-weight:900;" class="${truckColor}">${truckFmt}</div><div style="font-size:.65rem;color:var(--text2);">🚛 Truck</div></div>
+              <div style="text-align:center;"><div style="font-size:.95rem;font-weight:900;color:var(--green);">${whFmt}</div><div style="font-size:.65rem;color:var(--text2);">🏭 Warehouse</div></div>
             </div>
           </div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <button class="btn btn-primary btn-sm" onclick="openTruckLoadModal(${p.product_id},'${p.name}',${truckQty},${whQty},${cpb})">🚛 Load</button>
+            <button class="btn btn-outline btn-sm" onclick="openTruckReturnModal(${p.product_id},'${p.name}',${truckQty},${cpb})">↩️ Return</button>
+          </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:6px;">
-          <button class="btn btn-primary btn-sm" onclick="openTruckLoadModal(${p.product_id},'${p.name}',${truckQty},${whQty},${cpb})">${isAdmin()?'🚛 Load':'📤 Request'}</button>
-          <button class="btn btn-outline btn-sm" onclick="openTruckReturnModal(${p.product_id},'${p.name}',${truckQty},${cpb})">↩️ Return</button>
+      </div>`;
+    } else {
+      // Employee: inline qty input for bulk cart
+      const whBoxes = Math.floor(whQty / cpb);
+      return `<div class="card" style="margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          ${imgHtml}
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:.92rem;">${p.name}</div>
+            <div style="font-size:.73rem;color:var(--text2);">${cpb} bags/box</div>
+            <div style="display:flex;gap:12px;margin-top:4px;">
+              <div style="text-align:center;"><div style="font-size:.85rem;font-weight:800;" class="${truckColor}">${truckFmt}</div><div style="font-size:.62rem;color:var(--text2);">🚛 My Truck</div></div>
+              <div style="text-align:center;"><div style="font-size:.85rem;font-weight:800;color:var(--green);">${whFmt}</div><div style="font-size:.62rem;color:var(--text2);">🏭 Warehouse</div></div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px;">
+            <div style="font-size:.65rem;color:var(--text2);">Boxes to request</div>
+            <input type="number" min="0" max="${whBoxes}" value="0"
+              class="tl-bulk-qty form-input"
+              data-product-id="${p.product_id}"
+              data-product-name="${p.name}"
+              data-cpb="${cpb}"
+              data-wh-boxes="${whBoxes}"
+              style="width:65px;text-align:center;font-size:1rem;font-weight:800;padding:6px;"
+              oninput="updateBulkRequestBtn()">
+          </div>
         </div>
-      </div>
-    </div>`;
+      </div>`;
+    }
   }).join('');
+
+  // Show Submit All button for employees
+  const existing = document.getElementById('tl-submit-all-btn');
+  if (existing) existing.remove();
+  if (!isAdmin()) {
+    const btn = document.createElement('div');
+    btn.id = 'tl-submit-all-btn';
+    btn.style.cssText = 'position:fixed;bottom:0;left:0;right:0;padding:12px 16px;background:#fff;border-top:2px solid var(--border);z-index:200;display:none;';
+    btn.innerHTML = `<button class="btn btn-primary btn-block" onclick="submitBulkTruckRequest()" style="font-size:1rem;font-weight:800;padding:14px;">
+      📤 Submit Load Request (<span id="tl-bulk-count">0</span> products)
+    </button>`;
+    document.body.appendChild(btn);
+  }
 }
 
 function openTruckLoadModal(productId, name, truckQty, whQty, cpb) {
@@ -6965,7 +7003,9 @@ async function updateTargetBadge() {
         targetCard.style.display = '';
         targetVal.innerHTML = '<span style="color:'+col2+';font-size:.95rem;font-weight:900;">'+pct2+'%</span><br><span style="font-size:.62rem;opacity:.8;">'+fmtMoney(actual)+'/'+fmtMoney(dailyTarget)+'</span>';
       } else {
-        targetCard.style.display = 'none';
+        // No target set - show today's invoice count as useful info
+        targetCard.style.display = '';
+        targetVal.innerHTML = '<span style="color:#ffd700;font-size:.95rem;font-weight:900;">' + fmtMoney(actual) + '</span><br><span style="font-size:.62rem;opacity:.8;">No target set</span>';
       }
     }
 
@@ -7002,6 +7042,71 @@ async function saveTruckRequests(reqs) {
 }
 
 // Called when employee taps Load — instead of loading directly, creates request
+function updateBulkRequestBtn() {
+  const inputs = document.querySelectorAll('.tl-bulk-qty');
+  let count = 0, totalBoxes = 0;
+  inputs.forEach(inp => { const v = parseInt(inp.value)||0; if(v>0){count++; totalBoxes+=v;} });
+  const btn = document.getElementById('tl-submit-all-btn');
+  const countEl = document.getElementById('tl-bulk-count');
+  if (btn) btn.style.display = count > 0 ? 'block' : 'none';
+  if (countEl) countEl.textContent = count + ' product' + (count!==1?'s':'') + ', ' + totalBoxes + ' box' + (totalBoxes!==1?'es':'');
+}
+
+async function submitBulkTruckRequest() {
+  const inputs = document.querySelectorAll('.tl-bulk-qty');
+  const lines = [];
+  inputs.forEach(inp => {
+    const boxes = parseInt(inp.value)||0;
+    if (boxes <= 0) return;
+    const cpb = parseInt(inp.dataset.cpb)||1;
+    const whBoxes = parseInt(inp.dataset.whBoxes)||0;
+    if (boxes > whBoxes) {
+      showToast(`⚠️ ${inp.dataset.productName}: Only ${whBoxes} boxes in warehouse!`);
+      inp.focus();
+      return;
+    }
+    lines.push({
+      product_id: parseInt(inp.dataset.productId),
+      product_name: inp.dataset.productName,
+      boxes, bags: boxes * cpb, cpb
+    });
+  });
+  if (!lines.length) { showToast('⚠️ Enter at least one quantity!'); return; }
+
+  const owner = getCurrentTruckOwner();
+  const batchId = Date.now();
+  const batch = {
+    id: batchId,
+    date: today(),
+    time: new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),
+    employee: owner,
+    status: 'pending',
+    lines,
+    // Keep backward compat fields using first product
+    product_id: lines[0].product_id,
+    product_name: lines.map(l=>l.product_name+' ('+l.boxes+' box'+( l.boxes!==1?'es':'')+ ')').join(', '),
+    boxes: lines.reduce((a,l)=>a+l.boxes,0),
+    bags: lines.reduce((a,l)=>a+l.bags,0),
+    cpb: lines[0].cpb,
+    reject_reason: ''
+  };
+
+  const reqs = await getTruckRequests();
+  reqs.unshift(batch);
+  if (reqs.length > 200) reqs.splice(200);
+  await saveTruckRequests(reqs);
+
+  logAudit('Load Request', `${owner} requested ${batch.boxes} boxes (${lines.length} products)`);
+  showToast(`✅ Request sent to admin! ${lines.length} product${lines.length!==1?'s':''}, ${batch.boxes} boxes total`);
+
+  // Hide button and clear inputs
+  const btn = document.getElementById('tl-submit-all-btn');
+  if (btn) btn.style.display = 'none';
+  document.querySelectorAll('.tl-bulk-qty').forEach(inp => inp.value = 0);
+  updateApprovalBadge();
+  loadTruckScreen();
+}
+
 async function requestTruckLoad() {
   const productId = parseInt(document.getElementById('tl-product-id').value);
   const boxes = parseInt(document.getElementById('tl-qty').value) || 0;
@@ -7059,18 +7164,26 @@ async function loadApprovals(filter) {
   list.innerHTML = reqs.map(r => {
     const statusColor = r.status==='pending'?'var(--gold)':r.status==='approved'?'var(--green)':'var(--red)';
     const statusIcon = r.status==='pending'?'⏳':r.status==='approved'?'✅':'❌';
+    const lines = r.lines || [{ product_name: r.product_name, boxes: r.boxes, bags: r.bags }];
+    const productsHtml = lines.map(l =>
+      `<div style="font-size:.78rem;padding:3px 0;border-bottom:1px solid rgba(0,0,0,.06);">
+        📦 ${l.product_name} — <strong>${l.boxes} box${l.boxes!==1?'es':''} (${l.bags} bags)</strong>
+      </div>`
+    ).join('');
+    const totalBoxes = lines.reduce((a,l)=>a+l.boxes,0);
     return `<div class="card" style="margin-bottom:10px;">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
-          <div style="font-weight:700;font-size:.9rem;">👤 ${r.employee} → ${r.product_name}</div>
-          <div style="font-size:.78rem;color:var(--text2);">${fmtDate(r.date)} ${r.time} · ${r.boxes} boxes (${r.bags} bags)</div>
+          <div style="font-weight:700;font-size:.9rem;">👤 ${r.employee}</div>
+          <div style="font-size:.75rem;color:var(--text2);">${fmtDate(r.date)} ${r.time} · ${totalBoxes} box${totalBoxes!==1?'es':''} total · ${lines.length} product${lines.length!==1?'s':''}</div>
           ${r.reject_reason?`<div style="font-size:.75rem;color:var(--red);margin-top:2px;">Reason: ${r.reject_reason}</div>`:''}
         </div>
         <span style="font-weight:700;color:${statusColor};font-size:.85rem;">${statusIcon} ${r.status}</span>
       </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:6px 10px;margin-bottom:8px;">${productsHtml}</div>
       ${r.status==='pending'?`<div class="btn-row">
-        <button class="btn btn-danger btn-sm btn-block" onclick="openRejectModal(${r.id})">❌ Reject</button>
-        <button class="btn btn-primary btn-sm btn-block" onclick="approveRequest(${r.id})">✅ Approve</button>
+        <button class="btn btn-danger btn-sm btn-block" onclick="openRejectModal(${r.id})">❌ Reject All</button>
+        <button class="btn btn-primary btn-sm btn-block" onclick="approveRequest(${r.id})">✅ Approve All</button>
       </div>`:''}
     </div>`;
   }).join('');
@@ -7085,28 +7198,35 @@ async function approveRequest(reqId) {
   const req = reqs.find(r=>r.id===reqId);
   if (!req || req.status !== 'pending') { _approvingReqId = null; return; }
 
-  // Check warehouse still has stock
-  const whRows = await dbGetByIndex('warehouse_stock','product_id', req.product_id);
-  const whQty = whRows.length > 0 ? parseFloat(whRows[0].quantity||0) : 0;
-  if (req.bags > whQty) {
-    showToast(`⚠️ Not enough warehouse stock! Only ${fmtStock(whQty,req.cpb)} available.`);
-    _approvingReqId = null;
-    return;
+  // Handle batch request (multiple products) or single product
+  const lines = req.lines || [{ product_id: req.product_id, product_name: req.product_name, boxes: req.boxes, bags: req.bags, cpb: req.cpb }];
+
+  // Check all lines have enough warehouse stock first
+  for (const line of lines) {
+    const whRows = await dbGetByIndex('warehouse_stock','product_id', line.product_id);
+    const whQty = whRows.length > 0 ? parseFloat(whRows[0].quantity||0) : 0;
+    if (line.bags > whQty) {
+      showToast(`⚠️ Not enough stock for ${line.product_name}! Only ${fmtStock(whQty,line.cpb)} in warehouse.`);
+      _approvingReqId = null;
+      return;
+    }
   }
 
-  // Deduct from warehouse
-  if (whRows.length > 0) {
-    whRows[0].quantity = Math.max(0, whQty - req.bags);
-    whRows[0].last_updated = new Date().toISOString();
-    await dbPut('warehouse_stock', whRows[0]);
-  } else {
-    // No warehouse row - create one with 0 (stock was already at 0)
-    await dbAdd('warehouse_stock', { product_id: req.product_id, quantity: 0, last_updated: new Date().toISOString() });
-  }
-
-  // Add to employee truck
+  // Approve all lines
   const truckStock = await loadTruckStock(req.employee);
-  truckStock[req.product_id] = (truckStock[req.product_id]||0) + req.bags;
+  for (const line of lines) {
+    // Deduct from warehouse
+    const whRows = await dbGetByIndex('warehouse_stock','product_id', line.product_id);
+    const whQty = whRows.length > 0 ? parseFloat(whRows[0].quantity||0) : 0;
+    if (whRows.length > 0) {
+      whRows[0].quantity = Math.max(0, whQty - line.bags);
+      whRows[0].last_updated = new Date().toISOString();
+      await dbPut('warehouse_stock', whRows[0]);
+    }
+    // Add to truck
+    truckStock[line.product_id] = (truckStock[line.product_id]||0) + line.bags;
+    await saveTruckLoadLog(line.product_id, line.product_name, line.bags, line.cpb, req.employee, 'load');
+  }
   await saveTruckStock(req.employee, truckStock);
 
   // Update request status
