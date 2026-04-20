@@ -334,7 +334,6 @@ tr:hover td{background:#f8f9ff;}
     <button onclick="changeFinPin()" style="margin-top:8px;background:rgba(255,255,255,.15);color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;cursor:pointer;width:100%;">🔑 Change PIN</button>
     <button onclick="backupFinanceData()" style="margin-top:6px;background:rgba(255,255,255,.15);color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;cursor:pointer;width:100%;">💾 Backup Data</button>
     <button onclick="restoreFinanceData()" style="margin-top:6px;background:rgba(255,255,255,.15);color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;cursor:pointer;width:100%;">📂 Restore Backup</button>
-    <button onclick="resetFinanceData()" style="margin-top:6px;background:rgba(220,50,50,.4);color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;cursor:pointer;width:100%;">🗑️ Reset All Finance</button>
   </div>
 </div>
 
@@ -591,7 +590,7 @@ tr:hover td{background:#f8f9ff;}
         <button class="btn btn-primary btn-sm" onclick="openAddProductModal()">+ Add Product</button>
       </div>
       <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);">
-        <div class="stat-card navy"><div class="stat-label">📦 Total Products</div><div class="stat-val navy" id="prod-count">0</div></div>
+        <div class="stat-card navy"><div class="stat-label">📦 Products (from POS)</div><div class="stat-val navy" id="prod-count">0</div></div>
         <div class="stat-card green"><div class="stat-label">🏭 Total Warehouse Stock</div><div class="stat-val green" id="prod-wh-total">0 boxes</div></div>
         <div class="stat-card gold"><div class="stat-label">💰 Warehouse Value</div><div class="stat-val gold" id="prod-wh-value">QR 0</div></div>
       </div>
@@ -2371,6 +2370,7 @@ function loadProducts() {
   const search = (document.getElementById('prod-search')?.value||'').toLowerCase();
   const filtered = products.filter(p => !search || p.name.toLowerCase().includes(search));
   document.getElementById('prod-count').textContent = products.length;
+  // Note: product count = products in POS system. Add more products in POS → Products screen.
 
   // Real stock from Supabase sync
   const whMap = {}; (posData.warehouse_stock||[]).forEach(w => whMap[w.product_id] = w.quantity||0);
@@ -2398,7 +2398,7 @@ function loadProducts() {
       <td><strong>${p.icon||'📦'} ${p.name}</strong><div style="font-size:11px;color:var(--text2);">📦 ${cpb} bags/box · ${p.unit||''}</div></td>
       <td><span class="badge badge-blue">${p.category||'—'}</span></td>
       <td style="font-weight:700;color:var(--green);">${fmt(p.sell_price||0)}</td>
-      <td>${fmt(p.cost_price||0)} <small style="color:var(--text2);">(${margin}%)</small></td>
+      <td title="Set in POS → Products screen">${fmt(p.cost_price||0)} <small style="color:var(--text2);">(${margin}%)</small></td>
       <td style="font-weight:700;color:var(--green);">${whFmt}</td>
       <td style="font-weight:700;color:var(--navy);">${trFmt}</td>
       <td>
