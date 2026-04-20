@@ -1331,21 +1331,22 @@ const PO_KEY = 'fin_purchase_orders';
 // Generic: load any finance key from Supabase settings
 async function cloudGet(key) {
   try {
-    const { data, error } = await sb.from('settings').select('value').eq('key', key).single();
+    const { data, error } = await sb.from('settings').select('value').eq('key', key).maybeSingle();
     if (!error && data?.value) {
       const val = JSON.parse(data.value);
       lsSet(key, val);
       return val;
     }
   } catch(e) {}
-  return lsGet(key);
+  return lsGet(key); // fallback to local cache
 }
 
 // Generic: save any finance key to Supabase settings
 async function cloudSet(key, val) {
-  lsSet(key, val);
+  lsSet(key, val); // always save locally first (instant)
   try {
-    await sb.from('settings').upsert({ key: key, value: JSON.stringify(val) });
+    const { error } = await sb.from('settings').upsert({ key: key, value: JSON.stringify(val) }, { onConflict: 'key' });
+    if (error) console.warn('cloudSet:', key, error.message);
   } catch(e) { console.warn('cloudSet failed for ' + key + ':', e.message); }
 }
 
