@@ -2371,6 +2371,33 @@ function loadProducts() {
   const filtered = products.filter(p => !search || p.name.toLowerCase().includes(search));
   document.getElementById('prod-count').textContent = products.length;
   // Note: product count = products in POS system. Add more products in POS → Products screen.
+  // Auto-refresh warehouse stock from Supabase to show latest after truck loading
+  if (!loadProducts._refreshing) {
+    loadProducts._refreshing = true;
+    Promise.all([
+      sb.from('warehouse_stock').select('*'),
+      sb.from('inventory').select('*')
+    ]).then(([wh, inv]) => {
+      if (wh.data) posData.warehouse_stock = wh.data;
+      if (inv.data) posData.inventory = inv.data;
+      loadProducts._refreshing = false;
+      // Re-render with fresh data
+      const finProds2 = lsGet('fin_products');
+      const whMap2 = {}; posData.warehouse_stock.forEach(w => whMap2[w.product_id] = w.quantity||0);
+      const trMap2 = {}; posData.inventory.forEach(t => trMap2[t.product_id] = (trMap2[t.product_id]||0)+(t.quantity||0));
+      let totalBoxes2 = 0, totalValue2 = 0;
+      finProds2.forEach(p => {
+        const cpb2 = p.cases_per_box||4;
+        const wh2 = whMap2[p.pos_id]||0;
+        totalBoxes2 += Math.floor(wh2/cpb2);
+        totalValue2 += Math.floor(wh2/cpb2) * (p.cost_price||0);
+      });
+      const whTotEl = document.getElementById('prod-wh-total');
+      const whValEl = document.getElementById('prod-wh-value');
+      if(whTotEl) whTotEl.textContent = totalBoxes2 + ' boxes total';
+      if(whValEl) whValEl.textContent = fmt(totalValue2);
+    }).catch(() => { loadProducts._refreshing = false; });
+  }
 
   // Real stock from Supabase sync
   const whMap = {}; (posData.warehouse_stock||[]).forEach(w => whMap[w.product_id] = w.quantity||0);
