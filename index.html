@@ -4442,11 +4442,18 @@ async function saveTallyResults(mode) {
         const rows = await dbGetByIndex('warehouse_stock', 'product_id', p.product_id);
         const sysQty = rows.length > 0 ? rows[0].quantity : 0;
         if (rows.length > 0) {
-          rows[0].quantity = totalBags;
-          rows[0].last_updated = new Date().toISOString();
-          await dbPut('warehouse_stock', rows[0]); saved++;
+          // Direct Supabase update to avoid warehouse_id PK issue
+          if (rows[0].warehouse_id) {
+            await sb.from('warehouse_stock').update({ quantity: totalBags, last_updated: new Date().toISOString() }).eq('warehouse_id', rows[0].warehouse_id);
+          } else {
+            await sb.from('warehouse_stock').update({ quantity: totalBags, last_updated: new Date().toISOString() }).eq('product_id', p.product_id);
+          }
+          delete localCache['warehouse_stock'];
+          saved++;
         } else {
-          await dbAdd('warehouse_stock', { product_id: p.product_id, quantity: totalBags, last_updated: new Date().toISOString() }); saved++;
+          await sb.from('warehouse_stock').insert({ product_id: p.product_id, quantity: totalBags, last_updated: new Date().toISOString() });
+          delete localCache['warehouse_stock'];
+          saved++;
         }
         historyItems.push({
           product_id: p.product_id, name: p.name,
@@ -6168,12 +6175,17 @@ async function confirmTruckLoad() {
   const whQty = whRows.length > 0 ? whRows[0].quantity : 0;
   if (bags > whQty) { showToast(`⚠️ Only ${fmtStock(whQty, cpb)} in warehouse!`); return; }
 
-  // Deduct from warehouse
-  if (whRows.length > 0) {
-    whRows[0].quantity = Math.max(0, whQty - bags);
-    whRows[0].last_updated = new Date().toISOString();
-    await dbPut('warehouse_stock', whRows[0]);
-  }
+  // Deduct from warehouse — use direct update by product_id to avoid PK issues
+  const newWhQty = Math.max(0, whQty - bags);
+  try {
+    if (whRows.length > 0 && whRows[0].warehouse_id) {
+      await sb.from('warehouse_stock').update({ quantity: newWhQty, last_updated: new Date().toISOString() }).eq('warehouse_id', whRows[0].warehouse_id);
+    } else {
+      await sb.from('warehouse_stock').update({ quantity: newWhQty, last_updated: new Date().toISOString() }).eq('product_id', productId);
+    }
+    // Update local cache
+    delete localCache['warehouse_stock'];
+  } catch(e) { console.warn('Warehouse update failed:', e.message); }
 
   // Add to THIS owner's truck stock (settings-based)
   const truckStock = await loadTruckStock(owner);
@@ -6216,12 +6228,18 @@ async function confirmReturn() {
   truckStock[productId] = currentTruck - bags;
   await saveTruckStock(owner, truckStock);
 
-  // Add back to warehouse
+  // Add back to warehouse — direct update
   const whRows = await dbGetByIndex('warehouse_stock', 'product_id', productId);
-  if (whRows.length > 0) {
-    whRows[0].quantity = (whRows[0].quantity || 0) + bags;
-    whRows[0].last_updated = new Date().toISOString();
-    await dbPut('warehouse_stock', whRows[0]);
+  const retQty = (whRows.length > 0 ? parseFloat(whRows[0].quantity||0) : 0) + bags;
+  try {
+    if (whRows.length > 0 && whRows[0].warehouse_id) {
+      await sb.from('warehouse_stock').update({ quantity: retQty, last_updated: new Date().toISOString() }).eq('warehouse_id', whRows[0].warehouse_id);
+    } else {
+      await sb.from('warehouse_stock').upsert({ product_id: productId, quantity: retQty, last_updated: new Date().toISOString() });
+    }
+    delete localCache['warehouse_stock'];
+  } catch(e) { console.warn('Return warehouse update failed:', e.message); }
+  if (false) {  // placeholder for else
   } else {
     await dbAdd('warehouse_stock', { product_id: productId, quantity: bags, last_updated: new Date().toISOString() });
   }
@@ -7215,14 +7233,18 @@ async function approveRequest(reqId) {
   // Approve all lines
   const truckStock = await loadTruckStock(req.employee);
   for (const line of lines) {
-    // Deduct from warehouse
+    // Deduct from warehouse — direct update by product_id
     const whRows = await dbGetByIndex('warehouse_stock','product_id', line.product_id);
     const whQty = whRows.length > 0 ? parseFloat(whRows[0].quantity||0) : 0;
-    if (whRows.length > 0) {
-      whRows[0].quantity = Math.max(0, whQty - line.bags);
-      whRows[0].last_updated = new Date().toISOString();
-      await dbPut('warehouse_stock', whRows[0]);
-    }
+    const newQty = Math.max(0, whQty - line.bags);
+    try {
+      if (whRows.length > 0 && whRows[0].warehouse_id) {
+        await sb.from('warehouse_stock').update({ quantity: newQty, last_updated: new Date().toISOString() }).eq('warehouse_id', whRows[0].warehouse_id);
+      } else {
+        await sb.from('warehouse_stock').update({ quantity: newQty, last_updated: new Date().toISOString() }).eq('product_id', line.product_id);
+      }
+      delete localCache['warehouse_stock'];
+    } catch(e) { console.warn('WH update error:', e.message); }
     // Add to truck
     truckStock[line.product_id] = (truckStock[line.product_id]||0) + line.bags;
     await saveTruckLoadLog(line.product_id, line.product_name, line.bags, line.cpb, req.employee, 'load');
