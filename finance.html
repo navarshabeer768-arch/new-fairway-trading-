@@ -1325,27 +1325,32 @@ function showToast(msg, duration) {
 
 // Helper: get all purchases from fin_purchase_orders in a normalized flat format
 // Maps each ORDER (which may have multiple lines) into a single purchase record
-// ── Purchase Orders stored in Supabase settings (syncs across all devices) ──
+// ── All Finance data synced via Supabase settings table ──
 const PO_KEY = 'fin_purchase_orders';
 
-async function loadPOsFromCloud() {
+// Generic: load any finance key from Supabase settings
+async function cloudGet(key) {
   try {
-    const { data, error } = await sb.from('settings').select('value').eq('key', PO_KEY).single();
+    const { data, error } = await sb.from('settings').select('value').eq('key', key).single();
     if (!error && data?.value) {
-      const orders = JSON.parse(data.value);
-      lsSet(PO_KEY, orders); // cache locally
-      return orders;
+      const val = JSON.parse(data.value);
+      lsSet(key, val);
+      return val;
     }
   } catch(e) {}
-  return lsGet(PO_KEY); // fallback to local
+  return lsGet(key);
 }
 
-async function savePOsToCloud(orders) {
-  lsSet(PO_KEY, orders); // always save locally first
+// Generic: save any finance key to Supabase settings
+async function cloudSet(key, val) {
+  lsSet(key, val);
   try {
-    await sb.from('settings').upsert({ key: PO_KEY, value: JSON.stringify(orders) });
-  } catch(e) { console.warn('PO cloud save failed:', e.message); }
+    await sb.from('settings').upsert({ key: key, value: JSON.stringify(val) });
+  } catch(e) { console.warn('cloudSet failed for ' + key + ':', e.message); }
 }
+
+async function loadPOsFromCloud() { return cloudGet(PO_KEY); }
+async function savePOsToCloud(orders) { return cloudSet(PO_KEY, orders); }
 
 function getPurchaseOrders() {
   return lsGet(PO_KEY).map(o => ({
@@ -1435,7 +1440,7 @@ async function syncData() {
           notes: existing.notes || ''
         };
       });
-      lsSet('fin_products', rebuiltFinProds);
+      cloudSet('fin_products', rebuiltFinProds);
     }
     // Show sync status with data counts
     const prodCount = posData.products.length;
@@ -1448,8 +1453,19 @@ async function syncData() {
     }
     // Always reload the active page after sync so data appears
     const activePage = document.querySelector('.page.active');
-    // Load purchase orders from Supabase (so all devices see same data)
-    await loadPOsFromCloud();
+    // Load all finance data from Supabase (syncs across all devices)
+    await Promise.allSettled([
+      cloudGet('fin_purchase_orders').then(v => { if(v) lsSet('fin_purchase_orders', v); }),
+      cloudGet('fin_import_costs').then(v => { if(v) lsSet('fin_import_costs', v); }),
+      cloudGet('fin_drawings').then(v => { if(v) lsSet('fin_drawings', v); }),
+      cloudGet('fin_assets').then(v => { if(v) lsSet('fin_assets', v); }),
+      cloudGet('fin_chart_accounts').then(v => { if(v) lsSet('fin_chart_accounts', v); }),
+      cloudGet('fin_transactions').then(v => { if(v) lsSet('fin_transactions', v); }),
+      cloudGet('fin_suppliers').then(v => { if(v) lsSet('fin_suppliers', v); }),
+      cloudGet('fin_employees').then(v => { if(v) lsSet('fin_employees', v); }),
+      cloudGet('fin_payroll').then(v => { if(v) lsSet('fin_payroll', v); }),
+      cloudGet('fin_bank').then(v => { if(v) lsSet('fin_bank', v); }),
+    ]);
     if (activePage) loadCurrentPage(activePage.id.replace('page-', ''));
     // Populate customer dropdown for ledger
     const custOpts = posData.customers.map(c => `<option value="${c.customer_id}">${c.name}</option>`).join('');
@@ -1980,12 +1996,12 @@ function saveTransaction() {
     ref: document.getElementById('t-ref').value
   };
   if (!t.amount || !t.date) { alert('Fill all required fields'); return; }
-  const all = lsGet(LS.transactions); all.unshift(t); lsSet(LS.transactions, all);
+  const all = lsGet(LS.transactions); all.unshift(t); cloudSet(LS.transactions, all);
   closeModal('modal-transaction'); loadTransactions();
 }
 function deleteTransaction(id) {
   if (!confirm('Delete this transaction?')) return;
-  lsSet(LS.transactions, lsGet(LS.transactions).filter(t => t.id !== id)); loadTransactions();
+  cloudSet(LS.transactions, lsGet(LS.transactions).filter(t => t.id !== id)); loadTransactions();
 }
 
 // ═══════════════════════════════════════════
@@ -2021,12 +2037,12 @@ function openAddSupplierModal() { document.getElementById('sup-name').value = ''
 function saveSupplier() {
   const s = { id: Date.now().toString(), name: document.getElementById('sup-name').value, phone: document.getElementById('sup-phone').value, email: document.getElementById('sup-email').value, category: document.getElementById('sup-cat').value, address: document.getElementById('sup-addr').value };
   if (!s.name) { alert('Enter supplier name'); return; }
-  const all = lsGet(LS.suppliers); all.push(s); lsSet(LS.suppliers, all);
+  const all = lsGet(LS.suppliers); all.push(s); cloudSet(LS.suppliers, all);
   closeModal('modal-supplier'); loadSuppliers();
   // Update purchase dropdown
   refreshSupplierDropdowns();
 }
-function deleteSupplier(id) { if (!confirm('Delete?')) return; lsSet(LS.suppliers, lsGet(LS.suppliers).filter(s => s.id !== id)); loadSuppliers(); }
+function deleteSupplier(id) { if (!confirm('Delete?')) return; cloudSet(LS.suppliers, lsGet(LS.suppliers).filter(s => s.id !== id)); loadSuppliers(); }
 function openAddPurchaseModal() {
   refreshSupplierDropdowns();
   document.getElementById('pur-date').value = today();
@@ -2035,7 +2051,7 @@ function openAddPurchaseModal() {
 function savePurchase() {
   const p = { id: Date.now().toString(), date: document.getElementById('pur-date').value, supplier_id: document.getElementById('pur-supplier').value, description: document.getElementById('pur-desc').value, amount: parseFloat(document.getElementById('pur-amount').value) || 0, invoice_ref: document.getElementById('pur-inv').value, status: document.getElementById('pur-status').value };
   if (!p.amount || !p.date) { alert('Fill required fields'); return; }
-  const all = lsGet(LS.purchases); all.unshift(p); lsSet(LS.purchases, all);
+  const all = lsGet(LS.purchases); all.unshift(p); cloudSet(LS.purchases, all);
   closeModal('modal-purchase'); loadPurchases();
 }
 function refreshSupplierDropdowns() {
@@ -2083,10 +2099,10 @@ function openAddEmployeeModal() { document.getElementById('emp-join').value = to
 function saveEmployee() {
   const e = { id: Date.now().toString(), name: document.getElementById('emp-name').value, position: document.getElementById('emp-pos').value, salary: parseFloat(document.getElementById('emp-salary').value) || 0, phone: document.getElementById('emp-phone').value, join_date: document.getElementById('emp-join').value, status: document.getElementById('emp-status').value };
   if (!e.name) { alert('Enter name'); return; }
-  const all = lsGet(LS.employees); all.push(e); lsSet(LS.employees, all);
+  const all = lsGet(LS.employees); all.push(e); cloudSet(LS.employees, all);
   closeModal('modal-employee'); loadEmployees(); refreshEmployeeDropdowns();
 }
-function deleteEmployee(id) { if (!confirm('Delete?')) return; lsSet(LS.employees, lsGet(LS.employees).filter(e => e.id !== id)); loadEmployees(); }
+function deleteEmployee(id) { if (!confirm('Delete?')) return; cloudSet(LS.employees, lsGet(LS.employees).filter(e => e.id !== id)); loadEmployees(); }
 function openPayrollModal() {
   refreshEmployeeDropdowns();
   document.getElementById('pay-month').value = new Date().toISOString().slice(0, 7);
@@ -2103,7 +2119,7 @@ function savePayroll() {
     const net = e.salary + allowance - deduction;
     all.unshift({ id: Date.now().toString() + e.id, emp_id: e.id, month, basic: e.salary, allowance, deduction, net_pay: net, notes: document.getElementById('pay-notes').value });
   });
-  lsSet(LS.payroll, all);
+  cloudSet(LS.payroll, all);
   closeModal('modal-payroll'); loadPayroll(); loadEmployees();
 }
 function refreshEmployeeDropdowns() {
@@ -2136,7 +2152,7 @@ function openAddBankTxModal() { document.getElementById('bk-date').value = today
 function saveBankTx() {
   const t = { id: Date.now().toString(), date: document.getElementById('bk-date').value, type: document.getElementById('bk-type').value, amount: parseFloat(document.getElementById('bk-amount').value) || 0, ref: document.getElementById('bk-ref').value, description: document.getElementById('bk-desc').value, reconciled: false };
   if (!t.amount) { alert('Enter amount'); return; }
-  const all = lsGet(LS.bank); all.unshift(t); lsSet(LS.bank, all);
+  const all = lsGet(LS.bank); all.unshift(t); cloudSet(LS.bank, all);
   closeModal('modal-bank-tx'); loadBank();
 }
 
@@ -2445,7 +2461,7 @@ async function saveProduct() {
       notes: document.getElementById('prod-notes').value || existing.notes || '',
     });
     const updated = all[idx];
-    lsSet('fin_products', all);
+    cloudSet('fin_products', all);
     // Also update in POS Supabase if linked
     if (updated.pos_id) {
       try {
@@ -2524,7 +2540,7 @@ async function saveProduct() {
     // Final duplicate check by name
     if (!allNow.find(x => x.name.toLowerCase().trim() === p.name.toLowerCase().trim())) {
       allNow.unshift(p);
-      lsSet('fin_products', allNow);
+      cloudSet('fin_products', allNow);
     }
   }
   closeModal('modal-product');
@@ -2533,7 +2549,7 @@ async function saveProduct() {
 
 function deleteProduct(id) {
   if (!confirm('Delete this product?')) return;
-  lsSet('fin_products', lsGet('fin_products').filter(p => p.id !== id));
+  cloudSet('fin_products', lsGet('fin_products').filter(p => p.id !== id));
   loadProducts();
 }
 
@@ -2581,7 +2597,7 @@ function cleanDuplicateProducts() {
     }
   });
   const removed = all.length - clean.length;
-  lsSet('fin_products', clean);
+  cloudSet('fin_products', clean);
   loadProducts();
   if (removed > 0) {
     showToast('🧹 Removed ' + removed + ' duplicate product(s)!');
@@ -3026,13 +3042,13 @@ function saveImportCost() {
     reference: document.getElementById('ic-reference').value
   };
   if (!c.amount) { alert('Enter amount'); return; }
-  const all = lsGet('fin_import_costs'); all.unshift(c); lsSet('fin_import_costs', all);
+  const all = lsGet('fin_import_costs'); all.unshift(c); cloudSet('fin_import_costs', all);
   closeModal('modal-import-cost'); loadImportCosts();
 }
 
 function deleteImportCost(id) {
   if (!confirm('Delete?')) return;
-  lsSet('fin_import_costs', lsGet('fin_import_costs').filter(c => c.id !== id));
+  cloudSet('fin_import_costs', lsGet('fin_import_costs').filter(c => c.id !== id));
   loadImportCosts();
 }
 
@@ -3203,13 +3219,13 @@ function saveAsset() {
     notes: document.getElementById('ast-notes').value
   };
   if (!a.name || !a.purchase_value) { alert('Fill required fields'); return; }
-  const all = lsGet('fin_assets'); all.push(a); lsSet('fin_assets', all);
+  const all = lsGet('fin_assets'); all.push(a); cloudSet('fin_assets', all);
   closeModal('modal-asset'); loadAssets();
 }
 
 function deleteAsset(id) {
   if (!confirm('Delete this asset?')) return;
-  lsSet('fin_assets', lsGet('fin_assets').filter(a => a.id !== id)); loadAssets();
+  cloudSet('fin_assets', lsGet('fin_assets').filter(a => a.id !== id)); loadAssets();
 }
 
 // ═══════════════════════════════════════════
@@ -3250,7 +3266,7 @@ function loadPayables() {
 function markPurchasePaid(id) {
   const all = lsGet(LS.purchases);
   const idx = all.findIndex(p => p.id === id);
-  if (idx >= 0) { all[idx].status = 'paid'; lsSet(LS.purchases, all); }
+  if (idx >= 0) { all[idx].status = 'paid'; cloudSet(LS.purchases, all); }
   loadPayables();
 }
 
@@ -3280,13 +3296,13 @@ function saveDrawing() {
     description: document.getElementById('drw-desc').value
   };
   if (!d.amount) { alert('Enter amount'); return; }
-  const all = lsGet('fin_drawings'); all.unshift(d); lsSet('fin_drawings', all);
+  const all = lsGet('fin_drawings'); all.unshift(d); cloudSet('fin_drawings', all);
   closeModal('modal-drawing'); loadDrawings();
 }
 
 function deleteDrawing(id) {
   if (!confirm('Delete?')) return;
-  lsSet('fin_drawings', lsGet('fin_drawings').filter(d => d.id !== id)); loadDrawings();
+  cloudSet('fin_drawings', lsGet('fin_drawings').filter(d => d.id !== id)); loadDrawings();
 }
 
 // ═══════════════════════════════════════════
@@ -3594,7 +3610,7 @@ function loadAccounts() {
   let accounts = lsGet('fin_chart_accounts');
   if (!accounts.length) {
     accounts = DEFAULT_ACCOUNTS;
-    lsSet('fin_chart_accounts', accounts);
+    cloudSet('fin_chart_accounts', accounts);
   }
   const groups = { asset:'Assets', liability:'Liabilities', equity:'Equity / Capital', income:'Income', expense:'Expenses' };
   const colors = { asset:'navy', liability:'red', equity:'green', income:'green', expense:'red' };
@@ -3671,14 +3687,14 @@ function saveAccount() {
   } else {
     all.push(a);
   }
-  lsSet('fin_chart_accounts', all);
+  cloudSet('fin_chart_accounts', all);
   closeModal('modal-account');
   loadAccounts();
 }
 
 function deleteAccount(id) {
   if (!confirm('Delete this account?')) return;
-  lsSet('fin_chart_accounts', lsGet('fin_chart_accounts').filter(a => a.id !== id));
+  cloudSet('fin_chart_accounts', lsGet('fin_chart_accounts').filter(a => a.id !== id));
   loadAccounts();
 }
 
