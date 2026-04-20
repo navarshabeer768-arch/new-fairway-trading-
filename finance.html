@@ -1325,8 +1325,30 @@ function showToast(msg, duration) {
 
 // Helper: get all purchases from fin_purchase_orders in a normalized flat format
 // Maps each ORDER (which may have multiple lines) into a single purchase record
+// ── Purchase Orders stored in Supabase settings (syncs across all devices) ──
+const PO_KEY = 'fin_purchase_orders';
+
+async function loadPOsFromCloud() {
+  try {
+    const { data, error } = await sb.from('settings').select('value').eq('key', PO_KEY).single();
+    if (!error && data?.value) {
+      const orders = JSON.parse(data.value);
+      lsSet(PO_KEY, orders); // cache locally
+      return orders;
+    }
+  } catch(e) {}
+  return lsGet(PO_KEY); // fallback to local
+}
+
+async function savePOsToCloud(orders) {
+  lsSet(PO_KEY, orders); // always save locally first
+  try {
+    await sb.from('settings').upsert({ key: PO_KEY, value: JSON.stringify(orders) });
+  } catch(e) { console.warn('PO cloud save failed:', e.message); }
+}
+
 function getPurchaseOrders() {
-  return lsGet('fin_purchase_orders').map(o => ({
+  return lsGet(PO_KEY).map(o => ({
     id: o.id,
     date: o.date,
     amount: o.grand_total || o.total || 0,
@@ -1426,6 +1448,8 @@ async function syncData() {
     }
     // Always reload the active page after sync so data appears
     const activePage = document.querySelector('.page.active');
+    // Load purchase orders from Supabase (so all devices see same data)
+    await loadPOsFromCloud();
     if (activePage) loadCurrentPage(activePage.id.replace('page-', ''));
     // Populate customer dropdown for ledger
     const custOpts = posData.customers.map(c => `<option value="${c.customer_id}">${c.name}</option>`).join('');
@@ -2757,10 +2781,10 @@ async function savePurchaseOrder() {
       qty: poLines.reduce(function(a,l){return a+l.qty;},0),
       total: grandTotal
     };
-    // Save to localStorage
-    const all = lsGet('fin_purchase_orders');
+    // Save to Supabase + localStorage (syncs all devices)
+    const all = lsGet(PO_KEY);
     all.unshift(o);
-    lsSet('fin_purchase_orders', all);
+    await savePOsToCloud(all);
 
     // Update warehouse_stock in Supabase for each line
     let successCount = 0, errorMsgs = [];
@@ -2838,12 +2862,13 @@ function _doPrintPO(o) {
 function markPOPaid(id) {
   const all = lsGet('fin_purchase_orders');
   const idx = all.findIndex(function(o){return o.id===id;});
-  if (idx >= 0) { all[idx].status = 'paid'; lsSet('fin_purchase_orders', all); }
+  if (idx >= 0) { all[idx].status = 'paid'; savePOsToCloud(all); }
   loadPurchaseOrders();
 }
 function deletePO(id) {
   if (!confirm('Delete this purchase?')) return;
-  lsSet('fin_purchase_orders', lsGet('fin_purchase_orders').filter(function(o){return o.id!==id;}));
+  const remaining = lsGet(PO_KEY).filter(function(o){return o.id!==id;});
+  savePOsToCloud(remaining);
   loadPurchaseOrders();
 }
 
@@ -2868,7 +2893,7 @@ function cleanDuplicatePurchases() {
     clean.push(o);
   });
   const removed = all.length - clean.length;
-  lsSet('fin_purchase_orders', clean);
+  savePOsToCloud(clean);
   loadPurchaseOrders();
   showToast(removed > 0 ? ('🧹 Removed ' + removed + ' duplicate purchase(s)!') : '✅ No duplicates found.');
 }
@@ -2900,7 +2925,7 @@ async function repairOldPurchases() {
     }
     deduped.push(o);
   });
-  lsSet('fin_purchase_orders', deduped);
+  savePOsToCloud(deduped);
 
   // Tally total BAGS purchased per product — ALWAYS recalculate from qty × cpb
   // Never trust stored totalCases (may be inflated from old bugs)
