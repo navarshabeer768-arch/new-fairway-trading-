@@ -2371,15 +2371,29 @@ function loadProducts() {
   const filtered = products.filter(p => !search || p.name.toLowerCase().includes(search));
   document.getElementById('prod-count').textContent = products.length;
   // Note: product count = products in POS system. Add more products in POS → Products screen.
-  // Auto-refresh warehouse stock from Supabase to show latest after truck loading
+  // Auto-refresh warehouse + truck stock from Supabase to show latest after truck loading/sales
   if (!loadProducts._refreshing) {
     loadProducts._refreshing = true;
     Promise.all([
       sb.from('warehouse_stock').select('*'),
-      sb.from('inventory').select('*')
-    ]).then(([wh, inv]) => {
+      sb.from('settings').select('key,value')
+    ]).then(([wh, settings]) => {
       if (wh.data) posData.warehouse_stock = wh.data;
-      if (inv.data) posData.inventory = inv.data;
+      // Rebuild truck stock from settings (truck_stock_Admin, truck_stock_Emp etc)
+      if (settings.data) {
+        const truckMap = {};
+        settings.data.forEach(row => {
+          if (row.key && row.key.startsWith('truck_stock_')) {
+            try {
+              const obj = JSON.parse(row.value || '{}');
+              Object.entries(obj).forEach(([pid, qty]) => {
+                truckMap[parseInt(pid)] = (truckMap[parseInt(pid)]||0) + (parseFloat(qty)||0);
+              });
+            } catch(e) {}
+          }
+        });
+        posData.inventory = Object.entries(truckMap).map(([pid,qty]) => ({ product_id: parseInt(pid), quantity: qty }));
+      }
       loadProducts._refreshing = false;
       // Re-render with fresh data
       const finProds2 = lsGet('fin_products');
@@ -2396,6 +2410,33 @@ function loadProducts() {
       const whValEl = document.getElementById('prod-wh-value');
       if(whTotEl) whTotEl.textContent = totalBoxes2 + ' boxes total';
       if(whValEl) whValEl.textContent = fmt(totalValue2);
+      // Re-render the full table with updated data
+      const search2 = (document.getElementById('prod-search')?.value||'').toLowerCase();
+      const filtered2 = finProds2.filter(p => !search2 || p.name.toLowerCase().includes(search2));
+      const tableEl = document.getElementById('product-list');
+      if (tableEl) {
+        tableEl.innerHTML = filtered2.map(p => {
+          const cpb = p.cases_per_box || 4;
+          const whBags = p.pos_id ? (whMap2[p.pos_id]||0) : 0;
+          const trBags = p.pos_id ? (trMap2[p.pos_id]||0) : 0;
+          const whFmt = fmtStock(whBags, cpb);
+          const trFmt = fmtStock(trBags, cpb);
+          const margin = p.sell_price && p.cost_price ? (((p.sell_price-p.cost_price)/p.sell_price)*100).toFixed(0) : 0;
+          return `<tr>
+            <td><strong>${p.icon||'📦'} ${p.name}</strong><div style="font-size:11px;color:var(--text2);">📦 ${cpb} bags/box · ${p.unit||''}</div></td>
+            <td><span class="badge badge-blue">${p.category||'—'}</span></td>
+            <td style="font-weight:700;color:var(--green);">${fmt(p.sell_price||0)}</td>
+            <td title="Set in POS → Products screen">${fmt(p.cost_price||0)} <small style="color:var(--text2);">(${margin}%)</small></td>
+            <td style="font-weight:700;color:var(--green);">${whFmt}</td>
+            <td style="font-weight:700;color:var(--navy);">${trFmt}</td>
+            <td>
+              <button class="btn btn-outline btn-sm" onclick="editProduct('${p.id}')">✏️</button>
+              <button class="btn btn-outline btn-sm" onclick="setStockManual(${p.pos_id},'${p.name}',${whBags})" style="color:var(--green);" title="Set warehouse stock manually">📦</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteProduct('${p.id}')">✕</button>
+            </td>
+          </tr>`;
+        }).join('') || '<tr><td colspan="7" style="text-align:center;padding:30px;color:#999;">No products</td></tr>';
+      }
     }).catch(() => { loadProducts._refreshing = false; });
   }
 
@@ -3517,56 +3558,113 @@ function loadTrialBalance() {
 // ═══════════════════════════════════════════
 function loadStockReport() {
   const asOf = document.getElementById('stock-date').value || today();
-  const finProds = lsGet('fin_products');
-  const whMap = {}; posData.warehouse_stock.forEach(w => whMap[w.product_id] = w.quantity||0);
-  const truckStockMap = {};
-  posData.inventory.forEach(t => truckStockMap[t.product_id] = (truckStockMap[t.product_id]||0) + (t.quantity||0));
+  document.getElementById('stock-content').innerHTML = '<div class="loading"><div class="spinner"></div>Loading fresh data...</div>';
 
-  // Calculate total purchased per product up to asOf
+  Promise.all([
+    sb.from('warehouse_stock').select('*'),
+    sb.from('settings').select('*'),
+    sb.from('invoice_items').select('invoice_id,product_id,quantity').order('id', {ascending:false}),
+    sb.from('invoices').select('invoice_id,date,total_amount')
+  ]).then(([wh, settings, items, invs]) => {
+    if (wh.data) posData.warehouse_stock = wh.data;
+    // Force integer types to avoid === mismatch
+    if (invs.data) posData.invoices = invs.data.map(i => ({
+      invoice_id: parseInt(i.invoice_id),
+      date: (i.date||'').slice(0,10),
+      total_amount: parseFloat(i.total_amount||0)
+    }));
+    if (items.data) posData.invoice_items = items.data.map(it => ({
+      invoice_id: parseInt(it.invoice_id),
+      product_id: parseInt(it.product_id),
+      quantity: parseFloat(it.quantity||0)
+    }));
+    // Rebuild truck stock from settings
+    const settingsRows = settings.data || [];
+    const truckStockMap = {};
+    settingsRows.forEach(row => {
+      if (row.key && row.key.startsWith('truck_stock_')) {
+        try {
+          const stockObj = JSON.parse(row.value || '{}');
+          Object.entries(stockObj).forEach(([pid, qty]) => {
+            truckStockMap[parseInt(pid)] = (truckStockMap[parseInt(pid)]||0) + (parseFloat(qty)||0);
+          });
+        } catch(e) {}
+      }
+    });
+    posData.inventory = Object.entries(truckStockMap).map(([pid,qty]) => ({ product_id: parseInt(pid), quantity: qty }));
+    renderStockReport(asOf);
+  }).catch(e => { console.error('Stock load error:', e); renderStockReport(asOf); });
+}
+
+function renderStockReport(asOf) {
+  const finProds = lsGet('fin_products');
+  const whMap = {}; posData.warehouse_stock.forEach(w => whMap[parseInt(w.product_id)] = parseFloat(w.quantity||0));
+  const truckStockMap = {};
+  posData.inventory.forEach(t => truckStockMap[parseInt(t.product_id)] = (truckStockMap[parseInt(t.product_id)]||0) + parseFloat(t.quantity||0));
+
+  // Calculate total purchased per product (from Finance purchase orders)
   const purchasedByProduct = {};
   lsGet('fin_purchase_orders').filter(o => o.date <= asOf).forEach(o => {
     const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
     lines.forEach(l => {
-      const pid = parseInt(l.posProductId);
+      const pid = parseInt(l.posProductId || l.pos_product_id);
       if (!pid) return;
       const cpb = parseInt(l.cpb||l.cases_per_box||4);
-      purchasedByProduct[pid] = (purchasedByProduct[pid]||0) + (l.qty||0) * cpb;
+      purchasedByProduct[pid] = (purchasedByProduct[pid]||0) + (parseInt(l.qty)||0) * cpb; // bags
     });
   });
 
-  // Calculate total sold per product up to asOf
+  // Calculate total sold per product from invoice_items
+  // Fix: use String comparison to avoid integer/string type mismatch
+  const invoiceMap = {};
+  posData.invoices.forEach(i => { invoiceMap[String(i.invoice_id)] = i; });
+
   const soldByProduct = {};
-  posData.invoice_items.filter(it => {
-    const inv = posData.invoices.find(i => i.invoice_id === it.invoice_id);
-    return inv && inv.date <= asOf;
-  }).forEach(it => {
+  posData.invoice_items.forEach(it => {
+    const inv = invoiceMap[String(it.invoice_id)];
+    if (!inv || inv.date > asOf) return;
     const pid = parseInt(it.product_id);
-    soldByProduct[pid] = (soldByProduct[pid]||0) + parseFloat(it.quantity||0);
+    if (!pid) return;
+    soldByProduct[pid] = (soldByProduct[pid]||0) + parseFloat(it.quantity||0); // bags
   });
 
   let totalOpenValue = 0, totalCloseValue = 0, totalWhValue = 0;
   const rows = finProds.map(p => {
-    const pid = p.pos_id;
+    const pid = parseInt(p.pos_id);
     const cpb = parseInt(p.cases_per_box||4);
     const costPerBag = (p.cost_price||0) / cpb;
-    const purchased = purchasedByProduct[pid] || 0; // bags
-    const sold = soldByProduct[pid] || 0; // bags
-    const warehouseBags = whMap[pid] || 0;
-    const truckBags = truckStockMap[pid] || 0;
-    const closingBags = warehouseBags + truckBags;
-    const openingBags = Math.max(0, closingBags + sold - purchased); // opening = closing + sold - purchased
+    const purchased = purchasedByProduct[pid] || 0; // bags purchased total
+    const sold = soldByProduct[pid] || 0;           // bags sold total
+    const warehouseBags = whMap[pid] || 0;          // current warehouse (bags)
+    const truckBags = truckStockMap[pid] || 0;      // current truck (bags)
+    const currentTotalBags = warehouseBags + truckBags;
+
+    // Opening = Closing + Sold - Purchased
+    const openingBags = Math.max(0, currentTotalBags + sold - purchased);
     const openingBoxes = Math.floor(openingBags/cpb);
-    const closingBoxes = Math.floor(closingBags/cpb);
-    const openingValue = openingBags * costPerBag;
-    const closingValue = closingBags * costPerBag;
+    const soldBoxes = Math.floor(sold/cpb);
+    const soldBagsRem = sold % cpb;
+    const closingBoxes = Math.floor(currentTotalBags/cpb);
+    const closingValue = currentTotalBags * costPerBag;
     const whValue = warehouseBags * costPerBag;
-    totalOpenValue += openingValue;
+
+    totalOpenValue += openingBags * costPerBag;
     totalCloseValue += closingValue;
     totalWhValue += whValue;
-    return { name: p.name, cpb, openingBoxes, openingBags, openingValue,
-      purchasedBoxes: Math.floor(purchased/cpb), soldBoxes: Math.floor(sold/cpb),
-      warehouseBoxes: Math.floor(warehouseBags/cpb), truckBoxes: Math.floor(truckBags/cpb),
-      closingBoxes, closingValue, costPerBag };
+
+    const soldDisplay = sold === 0 ? '—' :
+      soldBoxes > 0 ? `-${soldBoxes} box${soldBoxes!==1?'es':''}${soldBagsRem>0?' +'+soldBagsRem+'bg':''}` :
+      `-${sold} bag${sold!==1?'s':''}`;
+
+    return {
+      name: p.name, cpb, costPerBag,
+      openingBoxes,
+      purchasedBoxes: Math.floor(purchased/cpb),
+      soldBoxes, soldDisplay,
+      warehouseBoxes: Math.floor(warehouseBags/cpb),
+      truckBoxes: Math.floor(truckBags/cpb),
+      closingBoxes, closingValue
+    };
   });
 
   document.getElementById('stock-content').innerHTML = `
@@ -3575,8 +3673,12 @@ function loadStockReport() {
       <div class="stat-card green"><div class="stat-label">🏭 Warehouse Value</div><div class="stat-val green">${fmt(totalWhValue)}</div></div>
       <div class="stat-card gold"><div class="stat-label">📊 Closing Stock Value</div><div class="stat-val gold">${fmt(totalCloseValue)}</div></div>
     </div>
+    <div style="padding:8px 12px;background:#e3f2fd;border-radius:8px;font-size:12px;color:#0d47a1;margin-bottom:12px;">
+      ℹ️ <strong>How stock works:</strong> Purchase → added to <strong>Warehouse</strong> · Load to Truck → moves from <strong>Warehouse to Truck</strong> · Sale → deducted from <strong>Truck</strong> · <em>Closing = Warehouse + All Trucks</em><br>
+      ⚠️ Warehouse column only decreases when stock is loaded to truck. Sales deduct from truck, not warehouse.
+    </div>
     <div class="card">
-      <div class="card-header"><div class="card-title">Stock Movement Report — as of ${asOf}</div></div>
+      <div class="card-header"><div class="card-title">Stock Movement Report — as of ${asOf}</div><div style="font-size:11px;color:var(--text2);">Live data from Supabase</div></div>
       <div class="card-body">
         <table>
           <thead><tr>
@@ -3594,9 +3696,9 @@ function loadStockReport() {
               <td><strong>${r.name}</strong><div style="font-size:11px;color:var(--text2);">${r.cpb} bags/box · QR ${r.costPerBag.toFixed(2)}/bag</div></td>
               <td style="text-align:center;">${r.openingBoxes} boxes</td>
               <td style="text-align:center;color:var(--green);">+${r.purchasedBoxes} boxes</td>
-              <td style="text-align:center;color:var(--red);">-${r.soldBoxes} boxes</td>
+              <td style="text-align:center;color:${r.soldBoxes>0?'var(--red)':'var(--text2)'};">${r.soldDisplay}</td>
               <td style="text-align:center;font-weight:700;color:var(--navy);">${r.warehouseBoxes} boxes</td>
-              <td style="text-align:center;font-weight:700;">${r.truckBoxes} boxes</td>
+              <td style="text-align:center;font-weight:700;color:var(--navy);">${r.truckBoxes} boxes</td>
               <td style="text-align:center;font-weight:800;color:var(--gold);">${r.closingBoxes} boxes</td>
               <td style="text-align:right;font-weight:700;">${fmt(r.closingValue)}</td>
             </tr>`).join('')}
