@@ -383,6 +383,10 @@ input[type=number]{-moz-appearance:textfield;}
       <div class="sum-val" id="hs-profit">QR 0</div>
       <div class="sum-lbl">Profit</div>
     </div>
+    <div class="sum-card" id="hs-target-card" style="display:none;">
+      <div class="sum-val" id="hs-target-val" style="font-size:1rem;">—</div>
+      <div class="sum-lbl">🎯 Target</div>
+    </div>
   </div>
   <div class="home-grid">
     <button class="home-btn highlight" onclick="showScreen('pos-screen')">
@@ -1070,7 +1074,7 @@ input[type=number]{-moz-appearance:textfield;}
           ">🗑️ DELETE ALL</button>
         </div>
       </div>
-      <button class="btn btn-danger btn-block mt-8" onclick="var b=document.getElementById('reset-confirm-box');b.style.display=b.style.display==='none'?'block':'none';">🗑️ Reset All Data</button>
+      <!-- Reset removed for production -->
     </div>
     <div class="card">
       <div class="card-title">About</div>
@@ -6127,9 +6131,11 @@ async function confirmTruckLoad() {
   if (bags > whQty) { showToast(`⚠️ Only ${fmtStock(whQty, cpb)} in warehouse!`); return; }
 
   // Deduct from warehouse
-  whRows[0].quantity = whQty - bags;
-  whRows[0].last_updated = new Date().toISOString();
-  await dbPut('warehouse_stock', whRows[0]);
+  if (whRows.length > 0) {
+    whRows[0].quantity = Math.max(0, whQty - bags);
+    whRows[0].last_updated = new Date().toISOString();
+    await dbPut('warehouse_stock', whRows[0]);
+  }
 
   // Add to THIS owner's truck stock (settings-based)
   const truckStock = await loadTruckStock(owner);
@@ -6541,7 +6547,12 @@ async function submitPin() {
     return;
   }
   if (currentLoginRole === 'admin') {
-    const savedPin = localStorage.getItem('app_pin') || DEFAULT_PIN;
+    // Always fetch latest PIN from Supabase so all devices stay in sync
+    let savedPin = localStorage.getItem('app_pin') || DEFAULT_PIN;
+    try {
+      const { data } = await sb.from('settings').select('value').eq('key','app_pin').maybeSingle();
+      if (data?.value) { savedPin = data.value; localStorage.setItem('app_pin', savedPin); }
+    } catch(e) {}
     if (entered === savedPin) {
       clearFailedAttempts();
       currentUserRole = 'admin';
@@ -6938,12 +6949,27 @@ async function updateTargetBadge() {
     const name = isAdmin() ? 'Admin' : (localStorage.getItem('employee_name')||'Admin');
     const targets = await getTargets();
     const dailyTarget = targets[name]?.daily || 0;
-    if (!dailyTarget) return;
     const t = today();
     const invoices = await dbGetByIndex('invoices','date',t);
     const meta = await getSalesmanMeta();
     invoices.forEach(inv => { const mn = meta[String(inv.invoice_id)]; if(mn) inv.salesman_name = mn; });
     const actual = invoices.filter(i=>(i.salesman_name||'Admin')===name).reduce((a,i)=>a+i.total_amount,0);
+
+    // Update target summary card on home screen
+    const targetCard = document.getElementById('hs-target-card');
+    const targetVal = document.getElementById('hs-target-val');
+    if (targetCard && targetVal) {
+      if (dailyTarget > 0) {
+        const pct2 = Math.min(100, Math.round(actual/dailyTarget*100));
+        const col2 = pct2>=100?'#4cff72':pct2>=70?'#ffd700':'#ff6b6b';
+        targetCard.style.display = '';
+        targetVal.innerHTML = '<span style="color:'+col2+';font-size:.95rem;font-weight:900;">'+pct2+'%</span><br><span style="font-size:.62rem;opacity:.8;">'+fmtMoney(actual)+'/'+fmtMoney(dailyTarget)+'</span>';
+      } else {
+        targetCard.style.display = 'none';
+      }
+    }
+
+    if (!dailyTarget) return;
     const pct = Math.min(100, Math.round(actual/dailyTarget*100));
     const color = pct>=100?'#2e7d32':pct>=70?'#f57f17':'#c62828';
     const existing = document.getElementById('daily-target-bar');
@@ -6956,7 +6982,7 @@ async function updateTargetBadge() {
       <span style="color:${color};font-weight:700;">${fmtMoney(actual)} / ${fmtMoney(dailyTarget)} (${pct}%)</span>
     </div>
     <div style="background:rgba(255,255,255,.2);border-radius:4px;height:6px;">
-      <div style="background:${color};height:6px;border-radius:4px;width:${pct}%;"></div>
+      <div style="background:${color};height:6px;border-radius:4px;width:${pct}%;transition:width .3s;"></div>
     </div>`;
     const summaryEl = document.querySelector('#home-screen .home-summary');
     if (summaryEl) summaryEl.after(bar);
@@ -7050,23 +7076,33 @@ async function loadApprovals(filter) {
   }).join('');
 }
 
+let _approvingReqId = null;
 async function approveRequest(reqId) {
+  if (_approvingReqId === reqId) { showToast('⏳ Already processing...'); return; }
+  _approvingReqId = reqId;
+  try {
   const reqs = await getTruckRequests();
   const req = reqs.find(r=>r.id===reqId);
-  if (!req || req.status !== 'pending') return;
+  if (!req || req.status !== 'pending') { _approvingReqId = null; return; }
 
   // Check warehouse still has stock
   const whRows = await dbGetByIndex('warehouse_stock','product_id', req.product_id);
-  const whQty = whRows.length > 0 ? whRows[0].quantity : 0;
+  const whQty = whRows.length > 0 ? parseFloat(whRows[0].quantity||0) : 0;
   if (req.bags > whQty) {
     showToast(`⚠️ Not enough warehouse stock! Only ${fmtStock(whQty,req.cpb)} available.`);
+    _approvingReqId = null;
     return;
   }
 
   // Deduct from warehouse
-  whRows[0].quantity = whQty - req.bags;
-  whRows[0].last_updated = new Date().toISOString();
-  await dbPut('warehouse_stock', whRows[0]);
+  if (whRows.length > 0) {
+    whRows[0].quantity = Math.max(0, whQty - req.bags);
+    whRows[0].last_updated = new Date().toISOString();
+    await dbPut('warehouse_stock', whRows[0]);
+  } else {
+    // No warehouse row - create one with 0 (stock was already at 0)
+    await dbAdd('warehouse_stock', { product_id: req.product_id, quantity: 0, last_updated: new Date().toISOString() });
+  }
 
   // Add to employee truck
   const truckStock = await loadTruckStock(req.employee);
@@ -7084,6 +7120,8 @@ async function approveRequest(reqId) {
   showToast(`✅ Approved! ${req.boxes} boxes loaded to ${req.employee} truck`);
   updateApprovalBadge();
   loadApprovals('pending');
+  } catch(e) { showToast('⚠️ Approval error: ' + e.message); console.error(e); }
+  finally { _approvingReqId = null; }
 }
 
 function openRejectModal(reqId) {
