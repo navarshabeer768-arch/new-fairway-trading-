@@ -2661,11 +2661,13 @@ async function loadCustomers() {
     return;
   }
   custs.sort((a,b) => a.name.localeCompare(b.name));
-  list.innerHTML = custs.map(c => `
+  list.innerHTML = custs.map(c => {
+    const mapUrl = getCustMapUrl(c.customer_id);
+    return `
     <div class="cust-card ${c.credit_balance > 0 ? 'has-credit' : 'no-credit'}" onclick="viewCustomer(${c.customer_id})">
       <div class="flex-between">
         <div>
-          <div class="cust-name">${c.name}</div>
+          <div class="cust-name">${c.name}${mapUrl ? ` <a href="${mapUrl}" target="_blank" onclick="event.stopPropagation()" style="font-size:.75rem;color:var(--navy);text-decoration:none;margin-left:6px;">📍 Map</a>` : ''}</div>
           <div class="cust-info">${c.contact_person||''} ${c.phone ? '· '+c.phone : ''}</div>
           <div class="cust-info" style="margin-top:2px;">${c.address||''}</div>
         </div>
@@ -2676,7 +2678,8 @@ async function loadCustomers() {
           <div style="font-size:.7rem;color:var(--text2);margin-top:4px;">Credit Balance</div>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function filterCustomers() {
@@ -2685,18 +2688,21 @@ function filterCustomers() {
     const filtered = custs.filter(c => c.name.toLowerCase().includes(q) || (c.phone||'').includes(q));
     // Re-render only filtered
     const list = document.getElementById('customers-list');
-    list.innerHTML = filtered.map(c => `
+    list.innerHTML = filtered.map(c => {
+      const mapUrl = getCustMapUrl(c.customer_id);
+      return `
       <div class="cust-card ${c.credit_balance > 0 ? 'has-credit' : 'no-credit'}" onclick="viewCustomer(${c.customer_id})">
         <div class="flex-between">
           <div>
-            <div class="cust-name">${c.name}</div>
+            <div class="cust-name">${c.name}${mapUrl ? ` <a href="${mapUrl}" target="_blank" onclick="event.stopPropagation()" style="font-size:.75rem;color:var(--navy);text-decoration:none;margin-left:6px;">📍 Map</a>` : ''}</div>
             <div class="cust-info">${c.contact_person||''} ${c.phone ? '· '+c.phone : ''}</div>
           </div>
           <div class="cust-credit ${c.credit_balance > 0 ? 'positive' : 'zero'}">
             ${c.credit_balance > 0 ? '💳 QR '+c.credit_balance.toFixed(2) : '✅ Clear'}
           </div>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   });
 }
 
@@ -2847,10 +2853,12 @@ async function viewCustomer(id) {
   const payments = await dbGetByIndex('credit_payments', 'customer_id', id);
   document.getElementById('cust-detail-name').textContent = '👤 ' + cust.name;
   const totalPurchases = invoices.reduce((a,i)=>a+i.total_amount,0);
+  const mapUrl = getCustMapUrl(cust.customer_id);
   let html = `<div class="card">
     <div class="summary-row"><span>📞 Phone:</span><span>${cust.phone||'-'}</span></div>
     <div class="summary-row"><span>👤 Contact:</span><span>${cust.contact_person||'-'}</span></div>
     <div class="summary-row"><span>📍 Address:</span><span style="text-align:right;max-width:60%;">${cust.address||'-'}</span></div>
+    ${mapUrl ? `<div class="summary-row"><span>🗺️ Location:</span><span><a href="${mapUrl}" target="_blank" style="color:var(--navy);font-weight:700;text-decoration:none;display:flex;align-items:center;gap:4px;">📍 Open in Google Maps</a></span></div>` : ''}
     <div class="summary-row"><span>🧾 Invoices:</span><span>${invoices.length}</span></div>
     <div class="summary-row"><span>💰 Total Purchases:</span><span>${fmtMoney(totalPurchases)}</span></div>
     <div class="summary-row total"><span>💳 Credit Balance:</span><span class="${cust.credit_balance>0?'color-red':'color-green'}">${fmtMoney(cust.credit_balance)}</span></div>
