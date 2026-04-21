@@ -1381,8 +1381,8 @@ async function syncData() {
       sb.from('warehouse_stock').select('*'),
       sb.from('settings').select('*'), // truck stock stored here as JSON
     ]);
-    posData.invoices = (inv.data || []).map(i => ({ ...i, date: (i.date || '').slice(0, 10), total_amount: parseFloat(i.total_amount || 0) }));
-    posData.customers = cust.data || [];
+    posData.invoices = (inv.data || []).map(i => ({ ...i, date: (i.date || '').slice(0, 10), total_amount: parseFloat(i.total_amount || 0), customer_id: i.customer_id ? parseInt(i.customer_id) : null }));
+    posData.customers = (cust.data || []).map(c => ({ ...c, customer_id: parseInt(c.customer_id) }));
     posData.products = prod.data || [];
     posData.invoice_items = (items.data || []).map(it => ({ ...it, date: (it.date || '').slice(0, 10), total: parseFloat(it.total || 0), price: parseFloat(it.price || 0) }));
     posData.expenses = (exp.data || []).map(e => ({ ...e, date: (e.date || '').slice(0, 10), amount: parseFloat(e.amount || 0) }));
@@ -2164,10 +2164,15 @@ function loadLedger() {
   const custId = document.getElementById('ledger-customer').value;
   const from = document.getElementById('ledger-from').value || '2000-01-01';
   const to = document.getElementById('ledger-to').value || today();
-  const custMap = {}; posData.customers.forEach(c => custMap[c.customer_id] = c);
+
+  // Build custMap with String keys to avoid integer/string mismatch
+  const custMap = {};
+  posData.customers.forEach(c => {
+    custMap[String(c.customer_id)] = c;
+  });
 
   let invs = posData.invoices.filter(i => i.date >= from && i.date <= to);
-  if (custId) invs = invs.filter(i => String(i.customer_id) === custId);
+  if (custId) invs = invs.filter(i => String(i.customer_id) === String(custId));
 
   const totalSales = invs.reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
   const totalCredit = invs.filter(i=>i.payment_type==='credit').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
@@ -2192,8 +2197,9 @@ function loadLedger() {
     // ── Sales Ranking by customer ──
     const byCustomer = {};
     invs.forEach(inv => {
-      const id = inv.customer_id || 'walkin';
-      if (!byCustomer[id]) byCustomer[id] = { name: custMap[id]?.name || 'Walk-in', total:0, count:0, credit:0, cash:0, cheque:0 };
+      const id = inv.customer_id ? String(inv.customer_id) : 'walkin';
+      const custName = custMap[String(inv.customer_id)]?.name || inv.customer_name || 'Walk-in';
+      if (!byCustomer[id]) byCustomer[id] = { name: custName, total:0, count:0, credit:0, cash:0, cheque:0 };
       byCustomer[id].total += parseFloat(inv.total_amount||0);
       byCustomer[id].count++;
       if (inv.payment_type==='credit') byCustomer[id].credit += parseFloat(inv.total_amount||0);
