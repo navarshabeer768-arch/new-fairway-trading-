@@ -1904,9 +1904,20 @@ function loadBalanceSheet() {
 
   // ── EQUITY ──
   const totalRevenue = invs.reduce((a,i) => a+parseFloat(i.total_amount||0), 0);
-  // COGS = Total Purchases - Remaining Inventory Value (what was actually sold)
-  const totalPurchaseCost = getPurchaseOrders().filter(p => p.date<=asOf).reduce((a,p) => a+p.amount, 0);
-  const totalCOGS = Math.max(0, totalPurchaseCost + importCostsPaid - inventoryValue);
+
+  // COGS = actual cost of items sold (from invoice_items) — same as P&L calculation
+  const invIds = new Set(invs.map(i => String(i.invoice_id)));
+  const prodMap = {}; posData.products.forEach(p => { prodMap[p.product_id] = p; });
+  const finProdMap = {}; finProds.forEach(p => { if(p.pos_id) finProdMap[parseInt(p.pos_id)] = p; });
+  let totalCOGS = 0;
+  posData.invoice_items.filter(it => invIds.has(String(it.invoice_id))).forEach(it => {
+    const pid = parseInt(it.product_id);
+    const pp = prodMap[pid] || {}; const fp = finProdMap[pid] || {};
+    const cpb = parseInt(pp.cases_per_box || fp.cases_per_box || 4);
+    const costPerBag = parseFloat(it.cost||0) || (parseFloat(pp.cost_price||fp.cost_price||0)/cpb);
+    totalCOGS += costPerBag * parseFloat(it.quantity||0);
+  });
+
   const totalAllExp = totalSalaries + totalExp + posExp;
   const retainedEarnings = totalRevenue - totalCOGS - totalAllExp - drawings;
   const ownerCapital = chartAccounts.filter(a => a.type==='equity').reduce((a,x) => a+parseFloat(x.opening_balance||0), 0);
