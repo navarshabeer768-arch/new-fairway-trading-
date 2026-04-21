@@ -3479,18 +3479,18 @@ function loadTrialBalance() {
   const invs = posData.invoices.filter(i => i.date <= asOf);
   const totalRevenue = invs.reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
 
-  // Cash & Bank
+  // Cash & Bank — correct formula (purchases NOT deducted from daily cash)
   const getPayT = i => (i.payment_type||'cash').toLowerCase().trim();
   const cashSales = invs.filter(i=>getPayT(i)==='cash').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
-  const chequeSales = invs.filter(i=>i.payment_type==='cheque').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
+  const partialCash = invs.filter(i=>getPayT(i)==='partial').reduce((a,i)=>a+parseFloat(i.cash_paid||0),0);
+  const chequeSales = invs.filter(i=>getPayT(i)==='cheque').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
   const bankIn = lsGet(LS.bank).filter(b=>b.type==='in'&&b.date<=asOf).reduce((a,b)=>a+b.amount,0);
   const bankOut = lsGet(LS.bank).filter(b=>b.type==='out'&&b.date<=asOf).reduce((a,b)=>a+b.amount,0);
-  const totalPurchasesPaid = getPurchaseOrders().filter(p=>p.status==='paid'&&p.date<=asOf).reduce((a,p)=>a+p.amount,0);
   const totalSalaries = lsGet(LS.payroll).reduce((a,p)=>a+p.net_pay,0);
   const totalExpenses = lsGet(LS.transactions).filter(t=>t.type==='expense'&&t.date<=asOf).reduce((a,t)=>a+t.amount,0);
   const totalPosExp = posData.expenses.filter(e=>e.date<=asOf).reduce((a,e)=>a+parseFloat(e.amount||0),0);
   const drawings = lsGet('fin_drawings').reduce((a,d)=>a+d.amount,0);
-  const cashAtHand = Math.max(0, cashSales - totalPurchasesPaid - totalSalaries - totalExpenses - totalPosExp - drawings);
+  const cashAtHand = Math.max(0, cashSales + partialCash - totalSalaries - totalExpenses - totalPosExp - drawings);
   const bankBalance = Math.max(0, chequeSales + bankIn - bankOut);
 
   // Receivables & Payables
@@ -3498,24 +3498,52 @@ function loadTrialBalance() {
   const totalPayables = getPurchaseOrders().filter(p=>(p.status==='pending'||p.status==='partial')&&p.date<=asOf).reduce((a,p)=>a+p.amount,0);
   const accruedSalaries = lsGet(LS.payroll).filter(p=>!p.paid).reduce((a,p)=>a+p.net_pay,0);
 
-  // Inventory (closing stock value)
+  // Inventory (closing stock value) — calculated same as Stock Report
   const finProds = lsGet('fin_products');
-  const whMap = {}; posData.warehouse_stock.forEach(w => whMap[w.product_id] = w.quantity||0);
-  const trMap = {}; posData.inventory.forEach(t => trMap[t.product_id] = (trMap[t.product_id]||0)+(t.quantity||0));
+  const purchasedByPid = {};
+  lsGet(PO_KEY).filter(o=>o.date<=asOf).forEach(o => {
+    const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
+    lines.forEach(l => {
+      const pid = parseInt(l.posProductId||l.pos_product_id); if(!pid) return;
+      const cpb = parseInt(l.cpb||l.cases_per_box||4);
+      purchasedByPid[pid] = (purchasedByPid[pid]||0) + (parseInt(l.qty)||0) * cpb;
+    });
+  });
+  const soldByPid = {};
+  const invIdSet = new Set(invs.map(i=>String(i.invoice_id)));
+  posData.invoice_items.filter(it=>invIdSet.has(String(it.invoice_id))).forEach(it=>{
+    const pid=parseInt(it.product_id); if(!pid) return;
+    soldByPid[pid]=(soldByPid[pid]||0)+parseFloat(it.quantity||0);
+  });
+  // Also get truck stock from settings
+  const truckByPid = {};
+  posData.inventory.forEach(t=>truckByPid[parseInt(t.product_id)]=(truckByPid[parseInt(t.product_id)]||0)+parseFloat(t.quantity||0));
+
   let inventoryValue = 0;
   finProds.forEach(p => {
-    const cpb = p.cases_per_box||4;
-    inventoryValue += ((whMap[p.pos_id]||0)+(trMap[p.pos_id]||0)) * ((p.cost_price||0)/cpb);
+    const pid=parseInt(p.pos_id); const cpb=parseInt(p.cases_per_box||4);
+    const costPerBag=(p.cost_price||0)/cpb;
+    const warehouseBags=Math.max(0,(purchasedByPid[pid]||0)-(soldByPid[pid]||0)-(truckByPid[pid]||0));
+    inventoryValue += (warehouseBags + (truckByPid[pid]||0)) * costPerBag;
   });
 
   // Fixed Assets (NBV)
   const fixedAssets = lsGet('fin_assets').filter(a=>a.status==='active');
   const totalFixedAssets = fixedAssets.reduce((a,ast)=>a+calcCurrentValue(ast),0);
 
-  // COGS = Purchases + Import - Closing Stock
-  const totalPurchases = getPurchaseOrders().filter(p=>p.date<=asOf).reduce((a,p)=>a+p.amount,0);
+  // COGS — from actual invoice_items cost (same as P&L and Balance Sheet)
+  const prodMap2 = {}; posData.products.forEach(p=>{ prodMap2[p.product_id]=p; });
+  const finProdMap2 = {}; finProds.forEach(p=>{ if(p.pos_id) finProdMap2[parseInt(p.pos_id)]=p; });
+  let cogs = 0;
+  posData.invoice_items.filter(it=>invIdSet.has(String(it.invoice_id))).forEach(it=>{
+    const pid=parseInt(it.product_id);
+    const pp=prodMap2[pid]||{}; const fp=finProdMap2[pid]||{};
+    const cpb=parseInt(pp.cases_per_box||fp.cases_per_box||4);
+    const costPerBag=parseFloat(it.cost||0)||(parseFloat(pp.cost_price||fp.cost_price||0)/cpb);
+    cogs += costPerBag * parseFloat(it.quantity||0);
+  });
   const totalImport = lsGet('fin_import_costs').filter(c=>c.date<=asOf).reduce((a,c)=>a+c.amount,0);
-  const cogs = Math.max(0, totalPurchases + totalImport - inventoryValue);
+  cogs += totalImport;
 
   // Equity = Revenue - COGS - Expenses - Drawings + Capital
   const ownerCapital = chartAccounts.filter(a=>a.type==='equity').reduce((a,x)=>a+parseFloat(x.opening_balance||0),0);
@@ -3754,9 +3782,27 @@ function renderStockReport(asOf) {
             </tr>`).join('')}
           </tbody>
           <tfoot>
-            <tr style="font-weight:900;background:#f8f9ff;">
-              <td colspan="7" style="padding:10px;">TOTAL CLOSING STOCK VALUE</td>
-              <td style="text-align:right;padding:10px;color:var(--navy);">${fmt(totalCloseValue)}</td>
+            <tr style="font-weight:900;background:#e8f5e9;font-size:13px;">
+              <td style="padding:10px;">TOTALS</td>
+              <td style="text-align:center;padding:10px;">—</td>
+              <td style="text-align:center;padding:10px;color:var(--green);">+${rows.reduce((a,r)=>a+r.purchasedBoxes,0)} boxes</td>
+              <td style="text-align:center;padding:10px;color:var(--red);">-${rows.reduce((a,r)=>a+r.soldBoxes,0)} boxes</td>
+              <td style="text-align:center;padding:10px;color:var(--navy);">${rows.reduce((a,r)=>a+r.warehouseBoxes,0)} boxes</td>
+              <td style="text-align:center;padding:10px;color:var(--navy);">${rows.reduce((a,r)=>a+r.truckBoxes,0)} boxes</td>
+              <td style="text-align:center;padding:10px;color:var(--gold);">${rows.reduce((a,r)=>a+r.closingBoxes,0)} boxes</td>
+              <td style="text-align:right;padding:10px;"></td>
+            </tr>
+            <tr style="font-weight:900;background:#fff8e1;font-size:14px;border-top:2px solid var(--gold);">
+              <td colspan="6" style="padding:12px;font-size:14px;">📦 TOTAL WAREHOUSE VALUE</td>
+              <td colspan="2" style="text-align:right;padding:12px;color:var(--green);font-size:15px;">${fmt(totalWhValue)}</td>
+            </tr>
+            <tr style="font-weight:900;background:#e8f5e9;font-size:14px;border-top:2px solid var(--green);">
+              <td colspan="6" style="padding:12px;font-size:14px;">🚛 TOTAL TRUCK VALUE</td>
+              <td colspan="2" style="text-align:right;padding:12px;color:var(--navy);font-size:15px;">${fmt(totalCloseValue - totalWhValue)}</td>
+            </tr>
+            <tr style="font-weight:900;background:#e3f2fd;font-size:15px;border-top:3px solid var(--navy);">
+              <td colspan="6" style="padding:14px;font-size:15px;">📊 TOTAL CLOSING STOCK VALUE (Warehouse + Truck)</td>
+              <td colspan="2" style="text-align:right;padding:14px;color:var(--navy);font-size:16px;">${fmt(totalCloseValue)}</td>
             </tr>
           </tfoot>
         </table>
