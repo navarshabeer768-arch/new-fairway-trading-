@@ -1849,18 +1849,23 @@ function loadBalanceSheet() {
   const asOf = document.getElementById('bs-date').value || today();
 
   // ── ASSETS ──
-  // Cash calculation: cash sales + bank deposits - cash payments - purchases - salaries - expenses
   const invs = posData.invoices.filter(i => i.date <= asOf);
-  const cashSales = invs.filter(i => i.payment_type === 'cash').reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
-  const chequeSales = invs.filter(i => i.payment_type === 'cheque').reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
+  const getPayT = i => (i.payment_type || 'cash').toLowerCase().trim();
+  const cashSales = invs.filter(i => getPayT(i) === 'cash').reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
+  const chequeSales = invs.filter(i => getPayT(i) === 'cheque').reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
+  const partialCash = invs.filter(i => getPayT(i) === 'partial').reduce((a,i) => a + parseFloat(i.cash_paid||0), 0);
   const bankIn = lsGet(LS.bank).filter(b => b.type==='in' && b.date<=asOf).reduce((a,b) => a+b.amount, 0);
   const bankOut = lsGet(LS.bank).filter(b => b.type==='out' && b.date<=asOf).reduce((a,b) => a+b.amount, 0);
-  const totalPurchasesPaid = getPurchaseOrders().filter(p => p.status==='paid' && p.date<=asOf).reduce((a,p) => a+p.amount, 0);
   const totalSalaries = lsGet(LS.payroll).reduce((a,p) => a+p.net_pay, 0);
   const totalExp = lsGet(LS.transactions).filter(t => t.type==='expense' && t.date<=asOf).reduce((a,t) => a+t.amount, 0);
   const posExp = posData.expenses.filter(e => e.date<=asOf).reduce((a,e) => a+parseFloat(e.amount||0), 0);
   const drawings = lsGet('fin_drawings').reduce((a,d) => a+d.amount, 0);
-  const cashAtHand = Math.max(0, cashSales - totalPurchasesPaid - totalSalaries - totalExp - posExp - drawings);
+
+  // Cash in hand = cash collected from sales - cash expenses paid - salaries - drawings
+  // (Purchases paid from owner capital/bank, not deducted from daily cash)
+  const cashReceived = cashSales + partialCash;
+  const cashPaidOut = totalSalaries + totalExp + posExp + drawings;
+  const cashAtHand = Math.max(0, cashReceived - cashPaidOut);
   const bankBalance = Math.max(0, chequeSales + bankIn - bankOut);
 
   // Accounts receivable = total credit balances owed by customers
@@ -1945,16 +1950,16 @@ function loadBalanceSheet() {
             ${chartAccounts.filter(a=>a.type==='liability'&&a.opening_balance>0).map(a=>`<tr><td style="padding:4px 0;">${a.name}</td><td style="text-align:right;">${fmt(a.opening_balance)}</td></tr>`).join('')}
             <tr style="font-weight:700;background:#fff5f5;"><td style="padding:6px 0;">Total Liabilities</td><td style="text-align:right;color:var(--red);">${fmt(totalLiabilities)}</td></tr>
             <tr><td colspan="2" style="font-weight:800;color:var(--navy);padding:8px 0;border-bottom:1px solid var(--border);">Equity / Capital</td></tr>
-            <tr><td style="padding:6px 0;">Owner Capital</td><td style="text-align:right;">${fmt(ownerCapital)}</td></tr>
-            <tr><td style="padding:6px 0;">Retained Earnings / Net Profit</td><td style="text-align:right;color:${retainedEarnings>=0?'var(--green)':'var(--red)'};">${fmt(retainedEarnings)}</td></tr>
-            <tr><td style="padding:6px 0;">Revenue (Period)</td><td style="text-align:right;">${fmt(totalRevenue)}</td></tr>
-            <tr><td style="padding:6px 0;color:var(--red);">Less: COGS (Purchases - Stock)</td><td style="text-align:right;color:var(--red);">- ${fmt(totalCOGS)}</td></tr>
-            <tr><td style="padding:6px 0;color:var(--red);">Less: Operating Expenses</td><td style="text-align:right;color:var(--red);">- ${fmt(totalAllExp)}</td></tr>
-            <tr><td style="padding:6px 0;color:var(--gold);">Less: Owner Drawings</td><td style="text-align:right;color:var(--gold);">- ${fmt(drawings)}</td></tr>
+            <tr><td style="padding:6px 0;">Owner Capital ${ownerCapital===0?'<span style="font-size:11px;color:#f57f17;cursor:pointer;" onclick="showPage(\'accounts\')">(⚠️ Enter in Chart of Accounts)</span>':''}</td><td style="text-align:right;">${fmt(ownerCapital)}</td></tr>
+            <tr style="font-weight:700;color:${retainedEarnings>=0?'var(--green)':'var(--red)'};"><td style="padding:6px 0;">Net Profit (This Period)</td><td style="text-align:right;">${fmt(retainedEarnings)}</td></tr>
+            ${drawings > 0 ? `<tr><td style="padding:4px 0 4px 12px;color:var(--gold);">Less: Owner Drawings</td><td style="text-align:right;color:var(--gold);">- ${fmt(drawings)}</td></tr>` : ''}
             ${chartAccounts.filter(a=>a.type==='equity'&&a.opening_balance>0).map(a=>`<tr><td style="padding:4px 0;">${a.name}</td><td style="text-align:right;">${fmt(a.opening_balance)}</td></tr>`).join('')}
             <tr style="font-weight:700;background:#f0fff4;"><td style="padding:6px 0;">Total Equity</td><td style="text-align:right;color:var(--green);">${fmt(totalEquity)}</td></tr>
             <tr style="font-weight:900;font-size:14px;border-top:2px solid var(--red);background:#fff0f0;"><td style="padding:10px 0;">TOTAL LIABILITIES + EQUITY</td><td style="text-align:right;color:var(--navy);">${fmt(totalLiabEquity)}</td></tr>
           </table>
+          ${ownerCapital === 0 ? `<div style="background:#fff8e1;border:1px solid #f57f17;border-radius:8px;padding:10px 14px;margin-top:12px;font-size:12px;color:#7f4000;">
+            💡 <strong>To balance this sheet:</strong> Go to <strong>Chart of Accounts → Owner Capital</strong> and enter QR ${fmt(totalAssets - totalLiabEquity)} as the opening balance (amount the owner invested to start the business).
+          </div>` : ''}
         </div>
       </div>
     </div>`;
