@@ -380,7 +380,7 @@ tr:hover td{background:#f8f9ff;}
         <div class="stat-card red">
           <div class="stat-label">💸 Total Expenses</div>
           <div class="stat-val red" id="d-expenses">QR 0</div>
-          <div class="stat-change" id="d-expenses-sub">Purchases + Salaries + Other</div>
+          <div class="stat-change" id="d-expenses-sub">Salaries + Operating Expenses</div>
         </div>
         <div class="stat-card navy">
           <div class="stat-label">📈 Net Profit</div>
@@ -1603,8 +1603,27 @@ function loadDashboard() {
   const posExp = posData.expenses.filter(e => e.date >= from && e.date <= to).reduce((a, e) => a + (e.amount || 0), 0);
   const salaries = lsGet(LS.payroll).filter(p => p.month >= from.slice(0, 7)).reduce((a, p) => a + p.net_pay, 0);
   const purchases = getPurchaseOrders().filter(p => p.date >= from && p.date <= to).reduce((a, p) => a + p.amount, 0);
-  const totalExp = finExp + posExp + salaries + purchases;
-  const profit = revenue - totalExp;
+
+  // Operating expenses = only actual expenses (NOT purchases — purchases are COGS)
+  const totalOpExp = finExp + posExp + salaries;
+
+  // COGS = cost of goods actually sold (from invoice items)
+  const invIds2 = new Set(invs.map(i => i.invoice_id));
+  const finProds2 = lsGet('fin_products');
+  const finProdMap2 = {}; finProds2.forEach(p => { if(p.pos_id) finProdMap2[parseInt(p.pos_id)] = p; });
+  const posProds2 = {}; posData.products.forEach(p => posProds2[p.product_id] = p);
+  let totalCOGS2 = 0;
+  posData.invoice_items.filter(it => invIds2.has(it.invoice_id) || invIds2.has(String(it.invoice_id))).forEach(it => {
+    const pid = parseInt(it.product_id);
+    const fp = finProdMap2[pid] || {}; const pp = posProds2[pid] || {};
+    const cpb = parseInt(pp.cases_per_box || fp.cases_per_box || 4);
+    const costPerBag = parseFloat(it.cost || 0) || (parseFloat(pp.cost_price || fp.cost_price || 0) / cpb);
+    totalCOGS2 += costPerBag * parseFloat(it.quantity || 0);
+  });
+
+  const grossProfit2 = revenue - totalCOGS2;
+  const totalExp = totalOpExp; // for display as "Total Expenses" = operating expenses only
+  const profit = grossProfit2 - totalOpExp;
 
   // Show warning if POS has no data
   const posWarning = document.getElementById('pos-data-warning');
@@ -1623,9 +1642,11 @@ function loadDashboard() {
   document.getElementById('d-revenue').textContent = fmt(revenue);
   document.getElementById('d-revenue-sub').textContent = `${invs.length} invoices`;
   document.getElementById('d-expenses').textContent = fmt(totalExp);
+  document.getElementById('d-expenses-sub').textContent = `Salaries: ${fmt(salaries)} · Ops: ${fmt(posExp+finExp)}`;
   document.getElementById('d-profit').textContent = fmt(profit);
   document.getElementById('d-profit').style.color = profit >= 0 ? 'var(--green)' : 'var(--red)';
-  document.getElementById('d-margin').textContent = revenue > 0 ? `Margin: ${((profit / revenue) * 100).toFixed(1)}%` : 'Margin: 0%';
+  const marginPct = revenue > 0 ? ((profit / revenue) * 100).toFixed(1) : 0;
+  document.getElementById('d-margin').textContent = `Net: ${fmt(profit)} · COGS: ${fmt(totalCOGS2)} · Margin: ${marginPct}%`;
   document.getElementById('d-credit').textContent = fmt(creditTotal);
 
   // Top customers
