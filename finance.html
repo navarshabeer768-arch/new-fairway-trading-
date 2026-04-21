@@ -3667,22 +3667,24 @@ function renderStockReport(asOf) {
     const costPerBag = (p.cost_price||0) / cpb;
     const purchased = purchasedByProduct[pid] || 0; // bags purchased total
     const sold = soldByProduct[pid] || 0;           // bags sold total
-    const warehouseBags = whMap[pid] || 0;          // current warehouse (bags)
-    const truckBags = truckStockMap[pid] || 0;      // current truck (bags)
-    const currentTotalBags = warehouseBags + truckBags;
+    const truckBags = truckStockMap[pid] || 0;      // current truck (bags) from settings
 
-    // Opening = Closing + Sold - Purchased
-    const openingBags = Math.max(0, currentTotalBags + sold - purchased);
+    // ── CORRECT FORMULA ──
+    // Opening = 0 (new business, no opening stock)
+    // Warehouse = Purchased - Sold - Truck
+    // Closing = Warehouse + Truck = Purchased - Sold
+    const openingBags = 0; // new business starts at 0
+    const warehouseBags = Math.max(0, purchased - sold - truckBags);
+    const currentTotalBags = warehouseBags + truckBags; // = Purchased - Sold
     const openingBoxes = Math.floor(openingBags/cpb);
     const soldBoxes = Math.floor(sold/cpb);
     const soldBagsRem = sold % cpb;
     const closingBoxes = Math.floor(currentTotalBags/cpb);
     const closingValue = currentTotalBags * costPerBag;
     const whValue = warehouseBags * costPerBag;
-
-    totalOpenValue += openingBags * costPerBag;
     totalCloseValue += closingValue;
     totalWhValue += whValue;
+    totalOpenValue += openingBags * costPerBag;
 
     const soldDisplay = sold === 0 ? '—' :
       soldBoxes > 0 ? `-${soldBoxes} box${soldBoxes!==1?'es':''}${soldBagsRem>0?' +'+soldBagsRem+'bg':''}` :
