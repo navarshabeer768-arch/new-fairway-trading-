@@ -1661,7 +1661,7 @@ function mergeProductPhotos(products) {
 function getPK(table) {
   const pks = {
     customers: 'customer_id', products: 'product_id', inventory: 'inventory_id',
-    invoices: 'invoice_id', invoice_items: 'id', expenses: 'expense_id',
+    invoices: 'invoice_id', invoice_items: 'id', expenses: 'id',
     credit_payments: 'payment_id', settings: 'key',
     warehouse_stock: 'warehouse_id', advance_orders: 'order_id'
   };
@@ -4137,10 +4137,9 @@ async function deleteExpense(id) {
   if (!isAdmin()) { showToast("⚠️ Admin access required"); return; }
   if (!safeConfirm('Delete this expense?')) return;
   try {
-    // Direct Supabase delete — bypass dbDelete to avoid silent failures
-    const { error } = await sb.from('expenses').delete().eq('expense_id', id);
+    // expenses table PK is 'id' (not 'expense_id')
+    const { error } = await sb.from('expenses').delete().eq('id', id);
     if (error) throw error;
-    // Clear local cache
     delete localCache['expenses'];
     loadExpenses();
     showToast('✅ Expense deleted');
