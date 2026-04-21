@@ -4136,9 +4136,18 @@ async function saveExpense() {
 async function deleteExpense(id) {
   if (!isAdmin()) { showToast("⚠️ Admin access required"); return; }
   if (!safeConfirm('Delete this expense?')) return;
-  await dbDelete('expenses', id);
-  loadExpenses();
-  showToast('🗑️ Deleted');
+  try {
+    // Direct Supabase delete — bypass dbDelete to avoid silent failures
+    const { error } = await sb.from('expenses').delete().eq('expense_id', id);
+    if (error) throw error;
+    // Clear local cache
+    delete localCache['expenses'];
+    loadExpenses();
+    showToast('✅ Expense deleted');
+  } catch(e) {
+    showToast('❌ Delete failed: ' + e.message);
+    console.error('Delete expense error:', e);
+  }
 }
 
 // ═══════════════════════════════════════════════
