@@ -1720,9 +1720,12 @@ function loadPL() {
   const to = document.getElementById('pl-to').value || today();
   const invs = posData.invoices.filter(i => i.date >= from && i.date <= to);
   const revenue = invs.reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
-  const cashSales = invs.filter(i => i.payment_type === 'cash').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
-  const creditSales = invs.filter(i => i.payment_type === 'credit').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
-  const chequeSales = invs.filter(i => i.payment_type === 'cheque').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
+  // payment_type: 'cash'|'credit'|'cheque'|'partial' — if missing/null default to cash
+  const getPayType = i => (i.payment_type || 'cash').toLowerCase().trim();
+  const cashSales = invs.filter(i => getPayType(i) === 'cash').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
+  const creditSales = invs.filter(i => getPayType(i) === 'credit').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
+  const chequeSales = invs.filter(i => getPayType(i) === 'cheque').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
+  const partialSales = invs.filter(i => getPayType(i) === 'partial').reduce((a, i) => a + parseFloat(i.total_amount || 0), 0);
 
   // ── COGS = cost of items actually SOLD in the period ──
   // invoice_items.cost = cost per bag (saved by POS at time of sale)
@@ -1794,6 +1797,7 @@ function loadPL() {
           <tr><td style="padding:8px 0;">Cash Sales</td><td style="text-align:right;">${fmt(cashSales)}</td></tr>
           <tr><td style="padding:8px 0;">Credit Sales</td><td style="text-align:right;">${fmt(creditSales)}</td></tr>
           <tr><td style="padding:8px 0;">Cheque Sales</td><td style="text-align:right;">${fmt(chequeSales)}</td></tr>
+          ${partialSales > 0 ? `<tr><td style="padding:8px 0;">Partial Sales</td><td style="text-align:right;">${fmt(partialSales)}</td></tr>` : ''}
           <tr style="font-weight:700;background:#e8f5e9;"><td style="padding:8px;">Total Revenue</td><td style="text-align:right;padding:8px;">${fmt(revenue)}</td></tr>
           <tr><td colspan="2" style="padding-top:16px;"></td></tr>
           <tr><td colspan="2" style="font-weight:800;font-size:15px;color:var(--red);padding:10px 0;border-bottom:2px solid var(--red);">COST OF GOODS SOLD</td></tr>
@@ -3439,7 +3443,8 @@ function loadTrialBalance() {
   const totalRevenue = invs.reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
 
   // Cash & Bank
-  const cashSales = invs.filter(i=>i.payment_type==='cash').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
+  const getPayT = i => (i.payment_type||'cash').toLowerCase().trim();
+  const cashSales = invs.filter(i=>getPayT(i)==='cash').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
   const chequeSales = invs.filter(i=>i.payment_type==='cheque').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
   const bankIn = lsGet(LS.bank).filter(b=>b.type==='in'&&b.date<=asOf).reduce((a,b)=>a+b.amount,0);
   const bankOut = lsGet(LS.bank).filter(b=>b.type==='out'&&b.date<=asOf).reduce((a,b)=>a+b.amount,0);
