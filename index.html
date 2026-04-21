@@ -2276,6 +2276,7 @@ async function completeOrder() {
     const chequeNum = payType === 'cheque' ? (document.getElementById('pos-cheque-num')?.value || '') : null;
     const chequeDate = payType === 'cheque' ? (document.getElementById('pos-cheque-date')?.value || '') : null;
     // Validation
+    if (!custId) { showToast('⚠️ Please select a customer!'); if(btn){btn.disabled=false;btn.textContent='✅ Complete Order';} return; }
     if (payType === 'credit' && !custId) { showToast('⚠️ Select customer for credit sale!'); return; }
     if (payType === 'partial' && !custId) { showToast('⚠️ Select customer for partial sale!'); return; }
     // Credit limit check (reads from DB column or local fallback)
