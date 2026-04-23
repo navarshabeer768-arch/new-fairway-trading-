@@ -1447,8 +1447,8 @@ input[type=number]{-moz-appearance:textfield;}
       <div class="card">
         <div class="card-title">💵 Submit Cash to Admin</div>
         <div class="form-group">
-          <label class="form-label">📅 Date <span style="font-size:.75rem;color:var(--text2);">(change if submitting for a previous day)</span></label>
-          <input type="date" class="form-input" id="handover-date">
+          <label class="form-label">📅 DATE <span style="font-size:.75rem;color:var(--text2);">(CHANGE IF SUBMITTING FOR A PREVIOUS DAY)</span></label>
+          <input type="date" class="form-input" id="handover-date" onchange="loadHandoverForDate(this.value)">
         </div>
         <div class="form-group">
           <label class="form-label">Cash Amount (QR)</label>
@@ -7514,21 +7514,41 @@ async function openHandoverScreen() {
   document.getElementById('handover-screen').classList.add('active');
 }
 
-async function loadHandoverEmployee() {
+// Called when date picker changes
+async function loadHandoverForDate(selectedDate) {
+  await loadHandoverEmployee(selectedDate);
+}
+
+async function loadHandoverEmployee(forDate) {
   const empName = localStorage.getItem('employee_name') || 'Employee';
-  const t = today();
-  // Today's invoices for this employee
-  const invoices = await dbGetByIndex('invoices','date',t);
+  const t = forDate || document.getElementById('handover-date')?.value || today();
+
+  // Get invoices for the selected date
+  let invoices = [];
+  try {
+    const { data } = await sb.from('invoices').select('*').eq('date', t);
+    invoices = data || [];
+  } catch(e) {
+    invoices = await dbGetByIndex('invoices','date',t);
+  }
   const meta = await getSalesmanMeta();
   invoices.forEach(inv => { const mn = meta[String(inv.invoice_id)]; if(mn) inv.salesman_name = mn; });
   const myInvoices = invoices.filter(i => (i.salesman_name||'Admin') === empName);
-  const totalCash = myInvoices.filter(i=>i.payment_type==='cash').reduce((a,i)=>a+i.total_amount,0);
-  const totalCredit = myInvoices.filter(i=>i.payment_type==='credit').reduce((a,i)=>a+i.total_amount,0);
-  const totalCheque = myInvoices.filter(i=>i.payment_type==='cheque').reduce((a,i)=>a+i.total_amount,0);
-  const totalPartial = myInvoices.filter(i=>i.payment_type==='partial').reduce((a,i)=>a+(i.cash_paid||0),0);
+
+  const getP = i => (i.payment_type||'cash').toLowerCase().trim();
+  const totalCash    = myInvoices.filter(i=>getP(i)==='cash').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
+  const totalCredit  = myInvoices.filter(i=>getP(i)==='credit').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
+  const totalCheque  = myInvoices.filter(i=>getP(i)==='cheque').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
+  const totalPartial = myInvoices.filter(i=>getP(i)==='partial').reduce((a,i)=>a+parseFloat(i.cash_paid||0),0);
   const expectedCash = totalCash + totalCheque + totalPartial;
 
+  const isToday = t === today();
+  const dateLabel = isToday ? 'Today' : fmtDate(t);
+
   document.getElementById('handover-emp-summary').innerHTML = `
+    <div style="background:${isToday?'':'#fff8e1'};border-radius:8px;padding:6px 10px;margin-bottom:8px;font-size:.8rem;color:${isToday?'var(--text2)':'#e65100'};font-weight:600;">
+      📅 Showing sales for: <strong>${dateLabel}</strong> · ${myInvoices.length} invoice${myInvoices.length!==1?'s':''}
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
       <div class="stat-card"><div class="stat-val color-green">${fmtMoney(totalCash)}</div><div class="stat-lbl">💵 Cash Sales</div></div>
       <div class="stat-card"><div class="stat-val" style="color:#1565c0;">${fmtMoney(totalCheque)}</div><div class="stat-lbl">🏦 Cheque</div></div>
@@ -7536,27 +7556,28 @@ async function loadHandoverEmployee() {
       <div class="stat-card"><div class="stat-val color-red">${fmtMoney(totalCredit)}</div><div class="stat-lbl">📋 Credit</div></div>
     </div>
     <div style="margin-top:8px;padding:10px;background:var(--surface2);border-radius:8px;text-align:center;">
-      <div style="font-size:.78rem;color:var(--text2);">Expected Cash to Hand Over</div>
+      <div style="font-size:.78rem;color:var(--text2);">Expected Cash to Hand Over (${dateLabel})</div>
       <div style="font-size:1.4rem;font-weight:900;color:var(--navy);">${fmtMoney(expectedCash)}</div>
     </div>`;
-  // Only prefill amount if field is empty (don't overwrite what user typed)
-  const amtEl = document.getElementById('handover-amount');
-  if (!amtEl.value || parseFloat(amtEl.value) === 0) {
-    amtEl.value = expectedCash.toFixed(2);
-  }
 
-  // Show today's handover history
+  // Auto-fill amount field
+  const amtEl = document.getElementById('handover-amount');
+  if (amtEl) amtEl.value = expectedCash > 0 ? expectedCash.toFixed(2) : '';
+
+  // Show submissions for selected date
   const handovers = await getHandovers();
   const myHandovers = handovers.filter(h=>h.employee===empName && h.date===t);
   const histEl = document.getElementById('handover-history-emp');
-  if (myHandovers.length) {
-    histEl.innerHTML = '<div class="section-title">Today\'s Submissions</div>' +
-      myHandovers.map(h=>`<div class="card" style="margin-bottom:6px;padding:10px;">
-        <div style="display:flex;justify-content:space-between;">
-          <div><div style="font-weight:700;">${fmtMoney(h.amount)}</div><div style="font-size:.75rem;color:var(--text2);">${h.time}${h.notes?' · '+h.notes:''}</div></div>
-          <span style="font-weight:700;color:${h.confirmed?'var(--green)':'var(--gold)'};">${h.confirmed?'✅ Confirmed':'⏳ Pending'}</span>
-        </div></div>`).join('');
-  } else { histEl.innerHTML = ''; }
+  if (histEl) {
+    histEl.innerHTML = myHandovers.length
+      ? `<div class="section-title">${isToday?"Today's":"Date's"} Submissions</div>` +
+        myHandovers.map(h=>`<div class="card" style="margin-bottom:6px;padding:10px;">
+          <div style="display:flex;justify-content:space-between;">
+            <div><div style="font-weight:700;">${fmtMoney(h.amount)}</div><div style="font-size:.75rem;color:var(--text2);">${h.time}${h.notes?' · '+h.notes:''}</div></div>
+            <span style="font-weight:700;color:${h.confirmed?'var(--green)':'var(--gold)'};">${h.confirmed?'✅ Confirmed':'⏳ Pending'}</span>
+          </div></div>`).join('')
+      : '';
+  }
 }
 
 async function submitHandover() {
@@ -7590,20 +7611,8 @@ async function submitHandover() {
   document.getElementById('handover-notes').value = '';
   document.getElementById('handover-date').value = today();
 
-  // Reload history
-  const handoversAfter = await getHandovers();
-  const myHandoversAfter = handoversAfter.filter(h=>h.employee===empName && h.date===today());
-  const histEl = document.getElementById('handover-history-emp');
-  if (histEl) {
-    histEl.innerHTML = myHandoversAfter.length
-      ? '<div class="section-title">Today\'s Submissions</div>' +
-        myHandoversAfter.map(h=>`<div class="card" style="margin-bottom:6px;padding:10px;">
-          <div style="display:flex;justify-content:space-between;">
-            <div><div style="font-weight:700;">${fmtMoney(h.amount)}</div><div style="font-size:.75rem;color:var(--text2);">${h.time}${h.notes?' · '+h.notes:''}</div></div>
-            <span style="font-weight:700;color:${h.confirmed?'var(--green)':'var(--gold)'};">${h.confirmed?'✅ Confirmed':'⏳ Pending'}</span>
-          </div></div>`).join('')
-      : '';
-  }
+  // Reload summary for today — will show QR 0 since handover is done
+  await loadHandoverEmployee(today());
 }
 
 async function loadHandoverAdmin() {
