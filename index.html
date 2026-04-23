@@ -1923,79 +1923,97 @@ function getDefaultSetting(k) {
 // ═══════════════════════════════════════════════
 async function updateHomeSummary() {
   const t = today();
-  document.getElementById('home-date').textContent = fmtDate(t) + ' — Qatar Time';
   const empName = isAdmin() ? 'Admin' : (localStorage.getItem('employee_name') || 'Admin');
 
-  // Get all today's invoices
-  const allTodayInvoices = await dbGetByIndex('invoices', 'date', t);
+  // ── Find last handover date for this employee ──
+  let lastHandoverDate = null;
+  try {
+    const handovers = await getHandovers();
+    const myHandovers = handovers
+      .filter(h => h.employee === empName && h.date)
+      .sort((a,b) => b.date.localeCompare(a.date));
+    if (myHandovers.length > 0) {
+      lastHandoverDate = myHandovers[0].date; // most recent handover date
+    }
+  } catch(e) {}
 
-  // Filter to only this employee's sales
+  // ── Show sales from AFTER last handover ──
+  // If no handover ever: show today only
+  // If last handover = yesterday: show only today
+  // If last handover = 2 days ago: show yesterday + today (employee forgot)
+  const fromDate = lastHandoverDate
+    ? (() => {
+        const d = new Date(lastHandoverDate);
+        d.setDate(d.getDate() + 1); // day AFTER last handover
+        return d.toISOString().slice(0,10);
+      })()
+    : t; // no handover yet → show today only
+
+  // Get all invoices from fromDate to today
+  let allInvoices = [];
+  try {
+    const { data } = await sb.from('invoices').select('*').gte('date', fromDate).lte('date', t);
+    allInvoices = data || [];
+  } catch(e) {
+    allInvoices = await dbGetByIndex('invoices', 'date', t);
+  }
+
+  // Filter to this employee
   const meta = await getSalesmanMeta();
-  const myTodayInvoices = allTodayInvoices.filter(inv => {
+  const myInvoices = allInvoices.filter(inv => {
     const salesman = meta[String(inv.invoice_id)] || inv.salesman_name || 'Admin';
-    return salesman === empName || isAdmin();
+    return isAdmin() ? true : salesman === empName;
   });
 
-  // Check if handover was done today — if so show sales AFTER handover
-  const lastHandoverStr = localStorage.getItem('last_handover_' + empName);
-  let displayInvoices = myTodayInvoices;
-  let afterHandover = false;
-  if (lastHandoverStr) {
-    const lastHandoverTime = new Date(lastHandoverStr);
-    const lastHandoverDate = lastHandoverTime.toISOString().slice(0,10);
-    if (lastHandoverDate === t) {
-      // Only show sales created after the handover
-      displayInvoices = myTodayInvoices.filter(inv => {
-        const invTime = inv.created_at ? new Date(inv.created_at) : null;
-        return invTime && invTime > lastHandoverTime;
-      });
-      afterHandover = true;
-    }
-  }
-
-  const totalSales = displayInvoices.reduce((a, i) => a + i.total_amount, 0);
+  const totalSales = myInvoices.reduce((a,i) => a + parseFloat(i.total_amount||0), 0);
   document.getElementById('hs-sales').textContent = 'QR ' + totalSales.toFixed(0);
-  document.getElementById('hs-invoices').textContent = displayInvoices.length;
+  document.getElementById('hs-invoices').textContent = myInvoices.length;
 
-  // Show reset indicator
+  // Date label — show period
   const dateEl = document.getElementById('home-date');
-  if (dateEl && afterHandover) {
-    dateEl.textContent = fmtDate(t) + ' — Qatar Time · 🔄 After Handover';
-  }
-  // Profit: need cost
-  const allItems = await dbGetAll('invoice_items');
-  const allProds = await dbGetAll('products');
-  const prodMap = {};
-  allProds.forEach(p => prodMap[p.product_id] = p);
-  let cost = 0;
-  for (const inv of invoices) {
-    const items = allItems.filter(i => i.invoice_id === inv.invoice_id);
-    for (const it of items) {
-      const p = prodMap[it.product_id];
-      if (p) {
-        const cpb = getCasesPerBox(p) || 1;
-        cost += (p.cost_price / cpb) * it.quantity; // cost per bag × bags sold
-      }
+  if (dateEl) {
+    if (lastHandoverDate && fromDate !== t) {
+      // Multiple days pending
+      dateEl.textContent = fmtDate(fromDate) + ' → ' + fmtDate(t) + ' ⚠️ Handover pending';
+      dateEl.style.color = '#ff9800';
+    } else {
+      dateEl.textContent = fmtDate(t) + ' — Qatar Time';
+      dateEl.style.color = '';
     }
   }
-  const exps = await dbGetByIndex('expenses', 'date', t);
-  const totalExp = exps.reduce((a, e) => a + e.amount, 0);
-  const profit = totalSales - cost - totalExp;
-  const profitEl = document.getElementById('hs-profit');
-  profitEl.textContent = 'QR ' + profit.toFixed(0);
-  const _pc = document.getElementById('hs-profit-card'); if(_pc) _pc.style.display = isAdmin() ? '' : 'none';
-  profitEl.style.color = profit >= 0 ? '#4cff72' : '#ff6b6b';
-  // Update orders badge
+
+  // Profit (admin only)
+  const _pc = document.getElementById('hs-profit-card');
+  if (_pc) _pc.style.display = isAdmin() ? '' : 'none';
+  if (isAdmin()) {
+    try {
+      const allItems = await dbGetAll('invoice_items');
+      const allProds = await dbGetAll('products');
+      const prodMap = {};
+      allProds.forEach(p => prodMap[p.product_id] = p);
+      let cost = 0;
+      for (const inv of myInvoices) {
+        const items = allItems.filter(i => i.invoice_id === inv.invoice_id);
+        for (const it of items) {
+          const p = prodMap[it.product_id];
+          if (p) { const cpb = getCasesPerBox(p)||1; cost += (p.cost_price/cpb)*it.quantity; }
+        }
+      }
+      const exps = await dbGetByIndex('expenses','date',t);
+      const totalExp = exps.reduce((a,e)=>a+e.amount,0);
+      const profit = totalSales - cost - totalExp;
+      const profitEl = document.getElementById('hs-profit');
+      if (profitEl) { profitEl.textContent = 'QR ' + profit.toFixed(0); profitEl.style.color = profit >= 0 ? '#4cff72' : '#ff6b6b'; }
+    } catch(e) {}
+  }
+
+  // Badges
   try {
     const orders = await dbGetAll('advance_orders');
     const pending = orders.filter(o => o.status === 'pending');
     const badge = document.getElementById('orders-badge');
-    if (badge) {
-      if (pending.length > 0) { badge.style.display = 'flex'; badge.textContent = pending.length; }
-      else { badge.style.display = 'none'; }
-    }
+    if (badge) { badge.style.display = pending.length > 0 ? 'flex' : 'none'; if(pending.length) badge.textContent = pending.length; }
   } catch(e) {}
-  // Update approval badge and target progress
   try { updateApprovalBadge(); } catch(e) {}
   try { updateTargetBadge(); } catch(e) {}
 }
@@ -7562,10 +7580,7 @@ async function submitHandover() {
   if (handovers.length > 500) handovers.splice(500);
   await dbPut('settings',{key:'cash_handovers', value: JSON.stringify(handovers)});
 
-  // Save last handover timestamp so dashboard only shows sales AFTER this handover
-  if (handoverDate === today()) {
-    localStorage.setItem('last_handover_' + empName, new Date().toISOString());
-  }
+  // Dashboard will auto-refresh using handover records from Supabase
 
   logAudit('Handover', `${empName} submitted QR ${amount.toFixed(2)} cash handover for ${handoverDate}`);
   showToast('✅ Cash handover submitted! Dashboard reset.');
