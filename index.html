@@ -1447,6 +1447,10 @@ input[type=number]{-moz-appearance:textfield;}
       <div class="card">
         <div class="card-title">💵 Submit Cash to Admin</div>
         <div class="form-group">
+          <label class="form-label">📅 Date <span style="font-size:.75rem;color:var(--text2);">(change if submitting for a previous day)</span></label>
+          <input type="date" class="form-input" id="handover-date">
+        </div>
+        <div class="form-group">
           <label class="form-label">Cash Amount (QR)</label>
           <input type="number" class="form-input" id="handover-amount" placeholder="0.00" style="font-size:1.5rem;font-weight:800;text-align:center;">
         </div>
@@ -1920,10 +1924,44 @@ function getDefaultSetting(k) {
 async function updateHomeSummary() {
   const t = today();
   document.getElementById('home-date').textContent = fmtDate(t) + ' — Qatar Time';
-  const invoices = await dbGetByIndex('invoices', 'date', t);
-  const totalSales = invoices.reduce((a, i) => a + i.total_amount, 0);
+  const empName = isAdmin() ? 'Admin' : (localStorage.getItem('employee_name') || 'Admin');
+
+  // Get all today's invoices
+  const allTodayInvoices = await dbGetByIndex('invoices', 'date', t);
+
+  // Filter to only this employee's sales
+  const meta = await getSalesmanMeta();
+  const myTodayInvoices = allTodayInvoices.filter(inv => {
+    const salesman = meta[String(inv.invoice_id)] || inv.salesman_name || 'Admin';
+    return salesman === empName || isAdmin();
+  });
+
+  // Check if handover was done today — if so show sales AFTER handover
+  const lastHandoverStr = localStorage.getItem('last_handover_' + empName);
+  let displayInvoices = myTodayInvoices;
+  let afterHandover = false;
+  if (lastHandoverStr) {
+    const lastHandoverTime = new Date(lastHandoverStr);
+    const lastHandoverDate = lastHandoverTime.toISOString().slice(0,10);
+    if (lastHandoverDate === t) {
+      // Only show sales created after the handover
+      displayInvoices = myTodayInvoices.filter(inv => {
+        const invTime = inv.created_at ? new Date(inv.created_at) : null;
+        return invTime && invTime > lastHandoverTime;
+      });
+      afterHandover = true;
+    }
+  }
+
+  const totalSales = displayInvoices.reduce((a, i) => a + i.total_amount, 0);
   document.getElementById('hs-sales').textContent = 'QR ' + totalSales.toFixed(0);
-  document.getElementById('hs-invoices').textContent = invoices.length;
+  document.getElementById('hs-invoices').textContent = displayInvoices.length;
+
+  // Show reset indicator
+  const dateEl = document.getElementById('home-date');
+  if (dateEl && afterHandover) {
+    dateEl.textContent = fmtDate(t) + ' — Qatar Time · 🔄 After Handover';
+  }
   // Profit: need cost
   const allItems = await dbGetAll('invoice_items');
   const allProds = await dbGetAll('products');
@@ -7448,6 +7486,9 @@ async function openHandoverScreen() {
     document.getElementById('handover-admin-section').style.display = 'none';
     const empName = localStorage.getItem('employee_name') || 'Employee';
     document.getElementById('handover-sub').textContent = empName;
+    // Set date to today by default
+    const dateEl = document.getElementById('handover-date');
+    if (dateEl && !dateEl.value) dateEl.value = today();
     await loadHandoverEmployee();
   }
   // Switch screen directly without triggering showScreen callbacks
@@ -7503,27 +7544,38 @@ async function loadHandoverEmployee() {
 async function submitHandover() {
   const amount = parseFloat(document.getElementById('handover-amount').value) || 0;
   const notes = document.getElementById('handover-notes').value.trim();
+  const handoverDate = document.getElementById('handover-date').value || today();
   if (amount <= 0) { showToast('⚠️ Enter valid amount'); return; }
   const empName = localStorage.getItem('employee_name') || 'Employee';
   const entry = {
     id: Date.now(),
-    date: today(),
+    date: handoverDate,
     time: new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),
     employee: empName,
     amount,
     notes,
-    confirmed: false
+    confirmed: false,
+    submitted_at: new Date().toISOString()
   };
   const handovers = await getHandovers();
   handovers.unshift(entry);
   if (handovers.length > 500) handovers.splice(500);
   await dbPut('settings',{key:'cash_handovers', value: JSON.stringify(handovers)});
-  logAudit('Handover', `${empName} submitted QR ${amount.toFixed(2)} cash handover`);
-  showToast('✅ Cash handover submitted!');
-  // Clear only the input fields after submit
+
+  // Save last handover timestamp so dashboard only shows sales AFTER this handover
+  if (handoverDate === today()) {
+    localStorage.setItem('last_handover_' + empName, new Date().toISOString());
+  }
+
+  logAudit('Handover', `${empName} submitted QR ${amount.toFixed(2)} cash handover for ${handoverDate}`);
+  showToast('✅ Cash handover submitted! Dashboard reset.');
+
+  // Reset input fields
   document.getElementById('handover-amount').value = '';
   document.getElementById('handover-notes').value = '';
-  // Reload only the history section, not the whole screen
+  document.getElementById('handover-date').value = today();
+
+  // Reload history
   const handoversAfter = await getHandovers();
   const myHandoversAfter = handoversAfter.filter(h=>h.employee===empName && h.date===today());
   const histEl = document.getElementById('handover-history-emp');
