@@ -596,7 +596,6 @@ input[type=number]{-moz-appearance:textfield;}
       <div class="topbar-sub">Truck & Warehouse</div>
     </div>
     <button class="btn-icon" onclick="printStockCount()" title="Print Stock Count">🖨️</button>
-    <button class="btn-icon" onclick="openAddStockModal()">+</button>
   </div>
   <div class="content pb-80">
     <!-- Tab switch -->
@@ -2626,40 +2625,54 @@ async function completeOrder() {
 async function loadInventory() {
   const products = await dbGetAll('products');
   const owner = getCurrentTruckOwner();
-  const truckStock = await loadTruckStock(owner); // {product_id: qty}
-  const whRows = await dbGetAll('warehouse_stock');
-  // Build invMap like the old format {product_id: {quantity: N}}
+  const truckStock = await loadTruckStock(owner);
   const invMap = {};
   Object.keys(truckStock).forEach(pid => { invMap[parseInt(pid)] = { quantity: truckStock[pid] }; });
-  const whMap = {}; whRows.forEach(i => whMap[i.product_id] = i);
+
+  // ── Calculate warehouse: Purchased - Sold - AllTrucks (same formula as Finance) ──
+  const allItems = await dbGetAll('invoice_items');
+  const soldByPid = {};
+  allItems.forEach(it => { const pid=parseInt(it.product_id); if(pid) soldByPid[pid]=(soldByPid[pid]||0)+parseFloat(it.quantity||0); });
+
+  const poRow = await dbGet('settings','fin_purchase_orders');
+  const poList = poRow?.value ? JSON.parse(poRow.value) : [];
+  const purchByPid = {};
+  poList.forEach(o => {
+    const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
+    lines.forEach(l => {
+      const pid=parseInt(l.posProductId||l.pos_product_id); if(!pid) return;
+      purchByPid[pid]=(purchByPid[pid]||0)+(parseInt(l.qty)||0)*parseInt(l.cpb||4);
+    });
+  });
+  const allTruckBags = {};
+  const settingsAll = await dbGetAll('settings');
+  settingsAll.forEach(row => {
+    if (row.key?.startsWith('truck_stock_')) {
+      try { const obj=JSON.parse(row.value||'{}'); Object.entries(obj).forEach(([pid,qty])=>{ allTruckBags[parseInt(pid)]=(allTruckBags[parseInt(pid)]||0)+parseFloat(qty||0); }); } catch(e){}
+    }
+  });
+  const calcWH = pid => Math.max(0, (purchByPid[pid]||0)-(soldByPid[pid]||0)-(allTruckBags[pid]||0));
+
   const alerts = document.getElementById('low-stock-alerts');
   const list = document.getElementById('inventory-list');
-  const low = products.filter(p => {
-    const qty = invMap[p.product_id]?.quantity || 0;
-    return qty <= (p.low_stock_threshold || 10) && qty > 0;
-  });
-  const out = products.filter(p => {
-    const qty = invMap[p.product_id]?.quantity || 0;
-    return qty <= 0;
-  });
-  let alertHtml = '';
-  if (out.length) alertHtml += `<div class="alert alert-warning">🚨 Out of stock: ${out.map(p=>p.name).join(', ')}</div>`;
-  if (low.length) alertHtml += `<div class="alert alert-warning">⚠️ Low stock: ${low.map(p=>p.name).join(', ')}</div>`;
-  alerts.innerHTML = alertHtml;
-  if (!products.length) { list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📦</div><div class="empty-state-text">No products yet</div><div class="empty-state-sub">Add products first</div></div>'; return; }
-  const cats = [...new Set(products.map(p => p.category))];
-  list.innerHTML = cats.map(cat => {
-    const catProds = products.filter(p => p.category === cat);
-    return `<div class="section-title">${cat}</div>` + catProds.map(p => {
-      const cpb = getCasesPerBox(p);
-      const truckCases = invMap[p.product_id]?.quantity || 0;
-      const whCases = whMap[p.product_id]?.quantity || 0;
-      const truckFmt = fmtStock(truckCases, cpb);
-      const whFmt = fmtStock(whCases, cpb);
-      const cls = truckCases <= 0 ? 'out' : truckCases <= (p.low_stock_threshold || 10) ? 'low' : '';
-      const imgHtml = p.photo
-        ? `<img class="inv-photo" src="${p.photo}" alt="${p.name}">`
-        : `<div class="inv-photo-placeholder">${p.icon||'📦'}</div>`;
+  const low = products.filter(p => { const q=invMap[p.product_id]?.quantity||0; return q<=(p.low_stock_threshold||10)&&q>0; });
+  const out = products.filter(p => (invMap[p.product_id]?.quantity||0)<=0);
+  let alertHtml='';
+  if(out.length) alertHtml+=`<div class="alert alert-warning">🚨 Out of stock: ${out.map(p=>p.name).join(', ')}</div>`;
+  if(low.length) alertHtml+=`<div class="alert alert-warning">⚠️ Low stock: ${low.map(p=>p.name).join(', ')}</div>`;
+  alerts.innerHTML=alertHtml;
+  if(!products.length){list.innerHTML='<div class="empty-state"><div class="empty-state-icon">📦</div><div class="empty-state-text">No products yet</div></div>';return;}
+  const cats=[...new Set(products.map(p=>p.category))];
+  list.innerHTML=cats.map(cat=>{
+    const catProds=products.filter(p=>p.category===cat);
+    return `<div class="section-title">${cat}</div>`+catProds.map(p=>{
+      const cpb=getCasesPerBox(p);
+      const truckCases=invMap[p.product_id]?.quantity||0;
+      const whCases=calcWH(p.product_id);
+      const truckFmt=fmtStock(truckCases,cpb);
+      const whFmt=fmtStock(whCases,cpb);
+      const cls=truckCases<=0?'out':truckCases<=(p.low_stock_threshold||10)?'low':'';
+      const imgHtml=p.photo?`<img class="inv-photo" src="${p.photo}" alt="${p.name}">`:`<div class="inv-photo-placeholder">${p.icon||'📦'}</div>`;
       return `<div class="inv-card">
         ${imgHtml}
         <div class="inv-info">
@@ -6231,14 +6244,53 @@ async function loadTruckScreen() {
 
   const products = await dbGetAll('products');
   const truckStock = await loadTruckStock(owner); // {product_id: qty}
-  const warehouse = await dbGetAll('warehouse_stock');
-  const whMap = {}; warehouse.forEach(w => whMap[w.product_id] = w.quantity);
+
+  // ── Calculate warehouse using same formula as Finance Stock Report ──
+  // Warehouse = Purchased (bags) - Sold (bags) - Truck (bags)
+  const allInvoices = await dbGetAll('invoices');
+  const allItems = await dbGetAll('invoice_items');
+  const allPOs = await dbGetAll('advance_orders'); // not purchase orders
+  // sold per product
+  const soldByPid = {};
+  allItems.forEach(it => {
+    const pid = parseInt(it.product_id); if(!pid) return;
+    soldByPid[pid] = (soldByPid[pid]||0) + parseFloat(it.quantity||0);
+  });
+  // purchased per product — from warehouse_stock initial load + purchases
+  // Simpler: read warehouse_stock from Supabase as OPENING, then add purchases, subtract sold & truck
+  // Best approach: Warehouse = purchased total - sold total - truck
+  // Get purchased from settings fin_purchase_orders
+  const poRaw = await dbGet('settings','fin_purchase_orders');
+  const poList = poRaw?.value ? JSON.parse(poRaw.value) : [];
+  const purchByPid = {};
+  poList.forEach(o => {
+    const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
+    lines.forEach(l => {
+      const pid = parseInt(l.posProductId||l.pos_product_id); if(!pid) return;
+      const cpb = parseInt(l.cpb||4);
+      purchByPid[pid] = (purchByPid[pid]||0) + (parseInt(l.qty)||0) * cpb;
+    });
+  });
+  // All truck stocks combined (for warehouse calc we need all trucks)
+  const allTruckBags = {};
+  const settingsAll = await dbGetAll('settings');
+  settingsAll.forEach(row => {
+    if (row.key && row.key.startsWith('truck_stock_')) {
+      try {
+        const obj = JSON.parse(row.value||'{}');
+        Object.entries(obj).forEach(([pid,qty]) => {
+          allTruckBags[parseInt(pid)] = (allTruckBags[parseInt(pid)]||0) + parseFloat(qty||0);
+        });
+      } catch(e) {}
+    }
+  });
+  const calcWH = pid => Math.max(0, (purchByPid[pid]||0) - (soldByPid[pid]||0) - (allTruckBags[pid]||0));
 
   let truckTotalBoxes = 0, whTotalBoxes = 0;
   products.forEach(p => {
     const cpb = getCasesPerBox(p) || 1;
     truckTotalBoxes += Math.floor((truckStock[p.product_id] || 0) / cpb);
-    whTotalBoxes += Math.floor((whMap[p.product_id] || 0) / cpb);
+    whTotalBoxes += Math.floor(calcWH(p.product_id) / cpb);
   });
   document.getElementById('tl-truck-total').textContent = truckTotalBoxes + ' boxes';
   document.getElementById('tl-warehouse-total').textContent = whTotalBoxes + ' boxes';
@@ -6249,7 +6301,7 @@ async function loadTruckScreen() {
   list.innerHTML = products.map(p => {
     const cpb = getCasesPerBox(p);
     const truckQty = truckStock[p.product_id] || 0;
-    const whQty = whMap[p.product_id] || 0;
+    const whQty = calcWH(p.product_id);
     const truckFmt = fmtStock(truckQty, cpb);
     const whFmt = fmtStock(whQty, cpb);
     const imgHtml = p.photo ? `<img class="inv-photo" src="${p.photo}" alt="${p.name}">` : `<div class="inv-photo-placeholder">${p.icon||'📦'}</div>`;
