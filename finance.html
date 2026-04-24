@@ -2423,9 +2423,15 @@ function loadProducts() {
     loadProducts._refreshing = true;
     Promise.all([
       sb.from('warehouse_stock').select('*'),
-      sb.from('settings').select('key,value')
-    ]).then(([wh, settings]) => {
+      sb.from('settings').select('key,value'),
+      sb.from('invoice_items').select('invoice_id,product_id,quantity')
+    ]).then(([wh, settings, items]) => {
       if (wh.data) posData.warehouse_stock = wh.data;
+      if (items.data) posData.invoice_items = items.data.map(it => ({
+        invoice_id: parseInt(it.invoice_id),
+        product_id: parseInt(it.product_id),
+        quantity: parseFloat(it.quantity||0)
+      }));
       // Rebuild truck stock from settings (truck_stock_Admin, truck_stock_Emp etc)
       if (settings.data) {
         const truckMap = {};
@@ -2442,16 +2448,38 @@ function loadProducts() {
         posData.inventory = Object.entries(truckMap).map(([pid,qty]) => ({ product_id: parseInt(pid), quantity: qty }));
       }
       loadProducts._refreshing = false;
-      // Re-render with fresh data
+      // Re-render with fresh data using CALCULATED warehouse (same formula as Stock Report)
       const finProds2 = lsGet('fin_products');
-      const whMap2 = {}; posData.warehouse_stock.forEach(w => whMap2[w.product_id] = w.quantity||0);
-      const trMap2 = {}; posData.inventory.forEach(t => trMap2[t.product_id] = (trMap2[t.product_id]||0)+(t.quantity||0));
+      const trMap2 = {}; posData.inventory.forEach(t => trMap2[parseInt(t.product_id)] = (trMap2[parseInt(t.product_id)]||0)+(parseFloat(t.quantity)||0));
+
+      // Calculate purchased per product (from Finance purchase orders)
+      const purchasedByPid = {};
+      lsGet(PO_KEY).forEach(o => {
+        const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
+        lines.forEach(l => {
+          const pid = parseInt(l.posProductId||l.pos_product_id); if(!pid) return;
+          const cpb = parseInt(l.cpb||l.cases_per_box||4);
+          purchasedByPid[pid] = (purchasedByPid[pid]||0) + (parseInt(l.qty)||0) * cpb;
+        });
+      });
+
+      // Calculate sold per product from invoice_items
+      const soldByPid = {};
+      posData.invoice_items.forEach(it => {
+        const pid = parseInt(it.product_id); if(!pid) return;
+        soldByPid[pid] = (soldByPid[pid]||0) + parseFloat(it.quantity||0);
+      });
+
+      // Warehouse = Purchased - Sold - Truck (same as Stock Report)
+      const calcWH = (pid) => Math.max(0, (purchasedByPid[pid]||0) - (soldByPid[pid]||0) - (trMap2[pid]||0));
+
       let totalBoxes2 = 0, totalValue2 = 0;
       finProds2.forEach(p => {
+        const pid = parseInt(p.pos_id);
         const cpb2 = p.cases_per_box||4;
-        const wh2 = whMap2[p.pos_id]||0;
-        totalBoxes2 += Math.floor(wh2/cpb2);
-        totalValue2 += Math.floor(wh2/cpb2) * (p.cost_price||0);
+        const whBags2 = calcWH(pid);
+        totalBoxes2 += Math.floor(whBags2/cpb2);
+        totalValue2 += Math.floor(whBags2/cpb2) * (p.cost_price||0);
       });
       const whTotEl = document.getElementById('prod-wh-total');
       const whValEl = document.getElementById('prod-wh-value');
@@ -2463,9 +2491,10 @@ function loadProducts() {
       const tableEl = document.getElementById('product-list');
       if (tableEl) {
         tableEl.innerHTML = filtered2.map(p => {
+          const pid = parseInt(p.pos_id);
           const cpb = p.cases_per_box || 4;
-          const whBags = p.pos_id ? (whMap2[p.pos_id]||0) : 0;
-          const trBags = p.pos_id ? (trMap2[p.pos_id]||0) : 0;
+          const whBags = calcWH(pid);
+          const trBags = trMap2[pid]||0;
           const whFmt = fmtStock(whBags, cpb);
           const trFmt = fmtStock(trBags, cpb);
           const margin = p.sell_price && p.cost_price ? (((p.sell_price-p.cost_price)/p.sell_price)*100).toFixed(0) : 0;
