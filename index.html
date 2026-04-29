@@ -6390,10 +6390,31 @@ async function confirmTruckLoad() {
   const bags = boxes * cpb;
   const owner = getCurrentTruckOwner();
 
-  // Get fresh warehouse qty directly from Supabase
-  const { data: whData } = await sb.from('warehouse_stock').select('*').eq('product_id', productId);
-  const whRow = whData && whData.length > 0 ? whData[0] : null;
-  const whQty = whRow ? parseFloat(whRow.quantity || 0) : 0;
+  // Calculate warehouse qty using the same formula as loadTruckScreen (Purchased - Sold - AllTrucks)
+  const allItems = await dbGetAll('invoice_items');
+  const soldBags = allItems.filter(it => parseInt(it.product_id) === productId).reduce((s, it) => s + parseFloat(it.quantity || 0), 0);
+  const poRaw2 = await dbGet('settings', 'fin_purchase_orders');
+  const poList2 = poRaw2?.value ? JSON.parse(poRaw2.value) : [];
+  let purchBags = 0;
+  poList2.forEach(o => {
+    const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box || 4 }];
+    lines.forEach(l => {
+      if (parseInt(l.posProductId || l.pos_product_id) === productId) {
+        purchBags += (parseInt(l.qty) || 0) * (parseInt(l.cpb) || 4);
+      }
+    });
+  });
+  const settingsAll2 = await dbGetAll('settings');
+  let allTruckBagsForPid = 0;
+  settingsAll2.forEach(row => {
+    if (row.key && row.key.startsWith('truck_stock_')) {
+      try {
+        const obj = JSON.parse(row.value || '{}');
+        allTruckBagsForPid += parseFloat(obj[productId] || 0);
+      } catch(e) {}
+    }
+  });
+  const whQty = Math.max(0, purchBags - soldBags - allTruckBagsForPid);
 
   if (bags > whQty) { showToast(`⚠️ Only ${fmtStock(whQty, cpb)} in warehouse!`); return; }
 
