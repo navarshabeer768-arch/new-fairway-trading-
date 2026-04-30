@@ -3652,11 +3652,27 @@ async function saveEditedInvoice() {
     inv.cash_paid = 0;
   }
 
-  if (oldPayType !== newPayType && inv.customer_id) {
+  const oldInvTotal = parseFloat(inv.total_amount) || 0; // original total BEFORE we overwrite it
+  if (inv.customer_id) {
     const cust = await dbGet('customers', inv.customer_id);
     if (cust) {
-      if (oldPayType === 'credit') cust.credit_balance = Math.max(0, (cust.credit_balance||0) - newTotal);
-      if (newPayType === 'credit') cust.credit_balance = (cust.credit_balance||0) + newTotal;
+      if (oldPayType !== newPayType) {
+        // Payment type changed — reverse old credit effect, apply new
+        if (oldPayType === 'credit' || oldPayType === 'partial') cust.credit_balance = Math.max(0, (cust.credit_balance||0) - oldInvTotal + (parseFloat(inv.cash_paid)||0));
+        if (newPayType === 'credit') cust.credit_balance = (cust.credit_balance||0) + inv.total_amount;
+        if (newPayType === 'partial') cust.credit_balance = (cust.credit_balance||0) + (inv.total_amount - (parseFloat(document.getElementById('edit-cash-paid')?.value)||0));
+      } else if (newPayType === 'credit') {
+        // Same credit invoice but total changed — adjust the difference only
+        const diff = inv.total_amount - oldInvTotal;
+        if (Math.abs(diff) > 0.001) cust.credit_balance = Math.max(0, (cust.credit_balance||0) + diff);
+      } else if (newPayType === 'partial') {
+        // Partial: credit portion may have changed
+        const oldCreditPortion = oldInvTotal - (parseFloat(inv.cash_paid)||0);
+        const newCashPaid = parseFloat(document.getElementById('edit-cash-paid')?.value) || 0;
+        const newCreditPortion = inv.total_amount - newCashPaid;
+        const diff = newCreditPortion - oldCreditPortion;
+        if (Math.abs(diff) > 0.001) cust.credit_balance = Math.max(0, (cust.credit_balance||0) + diff);
+      }
       cust.credit_balance = Math.max(0, cust.credit_balance||0);
       await dbPut('customers', cust);
     }
