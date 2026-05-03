@@ -717,6 +717,10 @@ input[type=number]{-moz-appearance:textfield;}
       <div class="btn-row" style="margin-top:6px;">
         <button class="btn btn-primary btn-block" onclick="closeModal('cust-detail-modal');openCustomerStatement(selectedCustomerId)">📄 Full Statement</button>
       </div>
+      <div class="btn-row" style="margin-top:6px;">
+        <button class="btn btn-outline btn-block" onclick="editCustomerFromDetail()" style="border-color:var(--navy);color:var(--navy);">✏️ Edit Customer</button>
+        <button class="btn btn-danger btn-block" onclick="deleteCustomerFromDetail()">🗑️ Delete Customer</button>
+      </div>
     </div>
   </div>
   <!-- Credit Payment Modal -->
@@ -2927,6 +2931,33 @@ function filterCustomers() {
   });
 }
 
+function editCustomerFromDetail() {
+  closeModal('cust-detail-modal');
+  dbGet('customers', selectedCustomerId).then(cust => {
+    if (cust) openCustomerModal(cust);
+  });
+}
+
+async function deleteCustomerFromDetail() {
+  const cust = await dbGet('customers', selectedCustomerId);
+  if (!cust) return;
+  if (!safeConfirm(`⚠️ Delete "${cust.name}"?\n\nThis will also remove their credit balance.\nInvoices will remain but show as Walk-in.`)) return;
+  try {
+    // Delete from Supabase
+    const { error } = await sb.from('customers').delete().eq('customer_id', selectedCustomerId);
+    if (error) throw error;
+    // Clear from cache
+    if (localCache['customers']) {
+      localCache['customers'] = localCache['customers'].filter(c => c.customer_id != selectedCustomerId);
+    }
+    closeModal('cust-detail-modal');
+    showToast('✅ Customer deleted: ' + cust.name);
+    loadCustomers();
+  } catch(e) {
+    showToast('❌ Delete failed: ' + e.message);
+  }
+}
+
 function openCustomerModal(cust) {
   document.getElementById('cust-modal-title').textContent = cust ? '✏️ Edit Customer' : '➕ Add Customer';
   document.getElementById('cust-id').value = cust ? cust.customer_id : '';
@@ -3069,8 +3100,15 @@ function getCreditLimitLocal(custId) {
 
 async function viewCustomer(id) {
   selectedCustomerId = id;
-  const cust = await dbGet('customers', id);
-  // Fetch invoices directly from Supabase to avoid cache type mismatch
+  // Fetch fresh from Supabase to avoid stale credit balance
+  let cust = null;
+  try {
+    const { data } = await sb.from('customers').select('*').eq('customer_id', id).single();
+    cust = data;
+  } catch(e) {}
+  if (!cust) cust = await dbGet('customers', id);
+  if (!cust) return;
+  // Fetch invoices fresh from Supabase
   let invoices = [];
   try {
     const { data } = await sb.from('invoices').select('*').eq('customer_id', id);
@@ -7642,11 +7680,16 @@ async function updateApprovalBadge() {
 async function getHandovers() {
   const row = await dbGet('settings','cash_handovers');
   const all = row?.value ? JSON.parse(row.value) : [];
-  // Deduplicate by id (same id = same submission submitted twice)
+  // Deduplicate: same id OR (same employee + same amount + same date + same time + same notes)
   const seen = new Set();
   return all.filter(h => {
-    if (seen.has(h.id)) return false;
-    seen.add(h.id);
+    // Primary dedup by id
+    if (seen.has(String(h.id))) return false;
+    seen.add(String(h.id));
+    // Secondary dedup by content fingerprint (same person, same amount, same minute)
+    const fingerprint = `${h.employee}|${h.amount}|${h.date}|${h.time}|${h.notes||''}`;
+    if (seen.has(fingerprint)) return false;
+    seen.add(fingerprint);
     return true;
   });
 }
