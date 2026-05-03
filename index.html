@@ -2583,10 +2583,21 @@ async function completeOrder() {
     }
     // Update customer credit
     if (custId && (payType === 'credit' || payType === 'partial')) {
-      const cust = await dbGet('customers', custId);
-      if (cust) {
-        cust.credit_balance = (cust.credit_balance || 0) + (total - cashPaid);
-        await dbPut('customers', cust);
+      // Fetch fresh from Supabase to avoid using stale cached value
+      let freshCust = null;
+      try {
+        const { data } = await sb.from('customers').select('*').eq('customer_id', custId).single();
+        freshCust = data;
+      } catch(e) {}
+      if (!freshCust) freshCust = await dbGet('customers', custId);
+      if (freshCust) {
+        freshCust.credit_balance = (freshCust.credit_balance || 0) + (total - cashPaid);
+        await dbPut('customers', freshCust);
+        // Clear cache so next read gets fresh value
+        if (localCache['customers']) {
+          const idx = localCache['customers'].findIndex(c => String(c.customer_id) === String(custId));
+          if (idx >= 0) localCache['customers'][idx] = freshCust;
+        }
       }
     }
     // Print — build invoice object locally, no need to fetch again
@@ -3059,10 +3070,17 @@ function getCreditLimitLocal(custId) {
 async function viewCustomer(id) {
   selectedCustomerId = id;
   const cust = await dbGet('customers', id);
-  const invoices = await dbGetByIndex('invoices', 'customer_id', id);
+  // Fetch invoices directly from Supabase to avoid cache type mismatch
+  let invoices = [];
+  try {
+    const { data } = await sb.from('invoices').select('*').eq('customer_id', id);
+    invoices = data || [];
+  } catch(e) {
+    invoices = (localCache['invoices'] || []).filter(i => String(i.customer_id) === String(id));
+  }
   const payments = await dbGetByIndex('credit_payments', 'customer_id', id);
   document.getElementById('cust-detail-name').textContent = '👤 ' + cust.name;
-  const totalPurchases = invoices.reduce((a,i)=>a+i.total_amount,0);
+  const totalPurchases = invoices.reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
   const mapUrl = getCustMapUrl(cust.customer_id);
   let html = `<div class="card">
     <div class="summary-row"><span>📞 Phone:</span><span>${cust.phone||'-'}</span></div>
@@ -7623,7 +7641,14 @@ async function updateApprovalBadge() {
 // ═══════════════════════════════════════════════════════════════
 async function getHandovers() {
   const row = await dbGet('settings','cash_handovers');
-  return row?.value ? JSON.parse(row.value) : [];
+  const all = row?.value ? JSON.parse(row.value) : [];
+  // Deduplicate by id (same id = same submission submitted twice)
+  const seen = new Set();
+  return all.filter(h => {
+    if (seen.has(h.id)) return false;
+    seen.add(h.id);
+    return true;
+  });
 }
 
 async function openHandoverScreen() {
@@ -7722,7 +7747,14 @@ async function loadHandoverEmployee(forDate) {
   }
 }
 
+let _submittingHandover = false;
 async function submitHandover() {
+  if (_submittingHandover) { showToast('⏳ Already submitting...'); return; }
+  _submittingHandover = true;
+  // Disable button visually
+  const btn = document.querySelector('[onclick="submitHandover()"]');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Submitting...'; }
+  try {
   const amount = parseFloat(document.getElementById('handover-amount').value) || 0;
   const notes = document.getElementById('handover-notes').value.trim();
   const handoverDate = document.getElementById('handover-date').value || today();
@@ -7792,6 +7824,14 @@ async function submitHandover() {
 
   // Reload summary for today — will show QR 0 since handover is done
   await loadHandoverEmployee(today());
+  } catch(e) {
+    showToast('❌ Error: ' + e.message);
+    console.error('Handover error:', e);
+  } finally {
+    _submittingHandover = false;
+    const btn2 = document.querySelector('[onclick="submitHandover()"]');
+    if (btn2) { btn2.disabled = false; btn2.textContent = '💵 Submit to Admin'; }
+  }
 }
 
 async function loadHandoverAdmin() {
