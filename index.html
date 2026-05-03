@@ -2941,15 +2941,20 @@ function editCustomerFromDetail() {
 async function deleteCustomerFromDetail() {
   const cust = await dbGet('customers', selectedCustomerId);
   if (!cust) return;
-  if (!safeConfirm(`⚠️ Delete "${cust.name}"?\n\nThis will also remove their credit balance.\nInvoices will remain but show as Walk-in.`)) return;
+  if (!safeConfirm(`⚠️ Delete "${cust.name}"?\n\nTheir invoices will remain but customer name will show as Walk-in.`)) return;
   try {
-    // Delete from Supabase
+    // First: remove customer_id from all their invoices (set to null) to avoid FK constraint
+    await sb.from('invoices').update({ customer_id: null }).eq('customer_id', selectedCustomerId);
+    // Also remove from credit_payments
+    await sb.from('credit_payments').delete().eq('customer_id', selectedCustomerId);
+    // Now delete the customer
     const { error } = await sb.from('customers').delete().eq('customer_id', selectedCustomerId);
     if (error) throw error;
     // Clear from cache
     if (localCache['customers']) {
       localCache['customers'] = localCache['customers'].filter(c => c.customer_id != selectedCustomerId);
     }
+    delete localCache['invoices'];
     closeModal('cust-detail-modal');
     showToast('✅ Customer deleted: ' + cust.name);
     loadCustomers();
@@ -7680,17 +7685,29 @@ async function updateApprovalBadge() {
 async function getHandovers() {
   const row = await dbGet('settings','cash_handovers');
   const all = row?.value ? JSON.parse(row.value) : [];
-  // Deduplicate: same id OR (same employee + same amount + same date + same time + same notes)
-  const seen = new Set();
-  return all.filter(h => {
-    // Primary dedup by id
-    if (seen.has(String(h.id))) return false;
-    seen.add(String(h.id));
-    // Secondary dedup by content fingerprint (same person, same amount, same minute)
-    const fingerprint = `${h.employee}|${h.amount}|${h.date}|${h.time}|${h.notes||''}`;
-    if (seen.has(fingerprint)) return false;
-    seen.add(fingerprint);
+  // Step 1: Deduplicate by id
+  const seenIds = new Set();
+  const deduped = all.filter(h => {
+    if (seenIds.has(String(h.id))) return false;
+    seenIds.add(String(h.id));
     return true;
+  });
+  // Step 2: Deduplicate by content fingerprint (same employee + amount + date + time = duplicate)
+  // Keep confirmed version if one exists, otherwise keep first
+  const grouped = {};
+  deduped.forEach(h => {
+    const key = `${h.employee}|${h.amount}|${h.date}|${h.time}`;
+    if (!grouped[key]) {
+      grouped[key] = h;
+    } else {
+      // Keep confirmed over pending
+      if (h.confirmed && !grouped[key].confirmed) grouped[key] = h;
+    }
+  });
+  return Object.values(grouped).sort((a,b) => {
+    // Sort by date desc, then time desc
+    if (b.date !== a.date) return b.date.localeCompare(a.date);
+    return (b.time||'').localeCompare(a.time||'');
   });
 }
 
