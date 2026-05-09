@@ -5844,21 +5844,24 @@ function _buildA4PDF(invoice, items, customer, prodMap) {
     const nm = (p&&p.name)||it.name||'';
     const bc = (p&&p.barcode)||'';
     const totalBags = parseFloat(it.quantity||0);
-    const isPiece = it.uom === 'piece' || (it.display_unit === 'Piece') || (it.pieces && parseInt(it.pieces) > 0);
-    const pieceCnt = parseInt(it.pieces || 0);
     const ppb = parseInt(p?.pieces_per_bag) || 1;
-    // If no pieces column saved yet, estimate from fractional bags
-    const estimatedPieces = isPiece && pieceCnt === 0 ? Math.round(totalBags * ppb) : pieceCnt;
+    // Detect piece mode: uom column, display_unit, pieces column, OR fractional bags with ppb>1
+    const hasPieceCols = it.uom === 'piece' || it.display_unit === 'Piece' || (it.pieces && parseInt(it.pieces) > 0);
+    const isFractional = ppb > 1 && totalBags > 0 && totalBags < 1 && (totalBags * ppb) % 1 < 0.01;
+    const isFractionalMulti = ppb > 1 && totalBags > 0 && Math.abs((totalBags * ppb) - Math.round(totalBags * ppb)) < 0.01 && totalBags !== Math.floor(totalBags);
+    const isPiece = hasPieceCols || isFractional || isFractionalMulti;
+    const pieceCnt = it.pieces && parseInt(it.pieces) > 0 ? parseInt(it.pieces) : Math.round(totalBags * ppb);
     const boxes = Math.floor(totalBags / bpb);
     const remBags = Math.round(totalBags % bpb);
     const unit = isPiece ? 'Piece' : boxes > 0 && remBags > 0 ? 'Box + Bag' : boxes > 0 ? 'Box' : 'Bag';
     const qtyVal = isPiece
-      ? (estimatedPieces > 0 ? estimatedPieces + '' : Math.round(totalBags * ppb) + '')
+      ? (pieceCnt > 0 ? String(pieceCnt) : String(Math.round(totalBags * ppb)))
       : remBags > 0 ? (boxes > 0 ? boxes + ' + ' + remBags : remBags + '') : (boxes + '');
-    // Price: for pieces show piece price, for bags/boxes show box price
     const piecePrice = parseFloat(it.piece_price || 0);
     const boxPrice = parseFloat(it.price || 0);
-    const displayPrice = isPiece && piecePrice > 0 ? piecePrice.toFixed(3) : boxPrice.toFixed(2);
+    // If piece mode and no piece_price saved, calculate it: total / pieces
+    const calcPiecePrice = isPiece && pieceCnt > 0 ? parseFloat(it.total || 0) / pieceCnt : 0;
+    const displayPrice = isPiece ? (piecePrice > 0 ? piecePrice.toFixed(3) : calcPiecePrice > 0 ? calcPiecePrice.toFixed(3) : (boxPrice / bpb / ppb).toFixed(3)) : boxPrice.toFixed(2);
     const amt   = it.is_foc?'':parseFloat(it.total||0).toFixed(2);
     const foc   = it.is_foc?qtyVal:'';
     const qty   = it.is_foc?'':qtyVal;
