@@ -3669,9 +3669,16 @@ function loadStockReport() {
     sb.from('warehouse_stock').select('*'),
     sb.from('settings').select('*'),
     sb.from('invoice_items').select('invoice_id,product_id,quantity').order('id', {ascending:false}),
-    sb.from('invoices').select('invoice_id,date,total_amount')
-  ]).then(([wh, settings, items, invs]) => {
+    sb.from('invoices').select('invoice_id,date,total_amount'),
+    sb.from('products').select('product_id,pieces_per_box,cases_per_box')
+  ]).then(([wh, settings, items, invs, prods]) => {
     if (wh.data) posData.warehouse_stock = wh.data;
+    // Build pieces_per_box map from actual products table
+    const ppbMap = {};
+    (prods.data || []).forEach(p => {
+      ppbMap[parseInt(p.product_id)] = parseInt(p.pieces_per_box) || parseInt(p.cases_per_box) || 4;
+    });
+    posData._ppbMap = ppbMap;
     // Force integer types to avoid === mismatch
     if (invs.data) posData.invoices = invs.data.map(i => ({
       invoice_id: parseInt(i.invoice_id),
@@ -3683,7 +3690,7 @@ function loadStockReport() {
       product_id: parseInt(it.product_id),
       quantity: parseFloat(it.quantity||0)
     }));
-    // Rebuild truck stock from settings
+    // Rebuild truck stock from settings (stored in PIECES)
     const settingsRows = settings.data || [];
     const truckStockMap = {};
     settingsRows.forEach(row => {
@@ -3696,6 +3703,7 @@ function loadStockReport() {
         } catch(e) {}
       }
     });
+    // Store truck stock as PIECES (raw) — renderStockReport will convert using ppbMap
     posData.inventory = Object.entries(truckStockMap).map(([pid,qty]) => ({ product_id: parseInt(pid), quantity: qty }));
     renderStockReport(asOf);
   }).catch(e => { console.error('Stock load error:', e); renderStockReport(asOf); });
@@ -3733,26 +3741,30 @@ function renderStockReport(asOf) {
     soldByProduct[pid] = (soldByProduct[pid]||0) + parseFloat(it.quantity||0); // bags
   });
 
+  const ppbMap = posData._ppbMap || {};
   let totalOpenValue = 0, totalCloseValue = 0, totalWhValue = 0;
   const rows = finProds.map(p => {
     const pid = parseInt(p.pos_id);
     const cpb = parseInt(p.cases_per_box||4);
+    // pieces_per_box from actual products table — truck stock is stored in PIECES
+    const ppb = ppbMap[pid] || cpb;
     const costPerBag = (p.cost_price||0) / cpb;
     const purchased = purchasedByProduct[pid] || 0; // bags purchased total
     const sold = soldByProduct[pid] || 0;           // bags sold total
-    const truckBags = truckStockMap[pid] || 0;      // current truck (bags) from settings
+    // Truck stock stored in PIECES → convert to bags using pieces_per_box
+    const truckPieces = truckStockMap[pid] || 0;
+    const truckBags = truckPieces / ppb * cpb; // pieces ÷ ppb = boxes, × cpb = bags
 
-    // ── CORRECT FORMULA ──
-    // Opening = 0 (new business, no opening stock)
-    // Warehouse = Purchased - Sold - Truck
-    // Closing = Warehouse + Truck = Purchased - Sold
-    const openingBags = 0; // new business starts at 0
+    const openingBags = 0;
     // ── USE ACTUAL warehouse_stock TABLE (same source as POS) ──
     const warehouseBags = whMap[pid] || 0;
     const currentTotalBags = warehouseBags + truckBags;
     const openingBoxes = Math.floor(openingBags/cpb);
     const soldBoxes = Math.floor(sold/cpb);
     const soldBagsRem = sold % cpb;
+    // Truck display: pieces → boxes using pieces_per_box
+    const truckWholeBoxes = Math.floor(truckPieces / ppb);
+    const truckRemPcs = truckPieces % ppb;
     const closingBoxes = Math.floor(currentTotalBags/cpb);
     const closingValue = currentTotalBags * costPerBag;
     const whValue = warehouseBags * costPerBag;
@@ -3763,14 +3775,17 @@ function renderStockReport(asOf) {
     const soldDisplay = sold === 0 ? '—' :
       soldBoxes > 0 ? `-${soldBoxes} box${soldBoxes!==1?'es':''}${soldBagsRem>0?' +'+soldBagsRem+'bg':''}` :
       `-${sold} bag${sold!==1?'s':''}`;
+    const truckDisplay = truckWholeBoxes > 0
+      ? (truckRemPcs > 0 ? `${truckWholeBoxes} boxes +${truckRemPcs} pcs` : `${truckWholeBoxes} boxes`)
+      : (truckPieces > 0 ? `${truckPieces} pcs` : '0 boxes');
 
     return {
-      name: p.name, cpb, costPerBag,
+      name: p.name, cpb, ppb, costPerBag,
       openingBoxes,
       purchasedBoxes: Math.floor(purchased/cpb),
       soldBoxes, soldDisplay,
       warehouseBoxes: Math.floor(warehouseBags/cpb),
-      truckBoxes: Math.floor(truckBags/cpb),
+      truckBoxes: truckWholeBoxes, truckDisplay,
       closingBoxes, closingValue
     };
   });
@@ -3806,7 +3821,7 @@ function renderStockReport(asOf) {
               <td style="text-align:center;color:var(--green);">+${r.purchasedBoxes} boxes</td>
               <td style="text-align:center;color:${r.soldBoxes>0?'var(--red)':'var(--text2)'};">${r.soldDisplay}</td>
               <td style="text-align:center;font-weight:700;color:var(--navy);">${r.warehouseBoxes} boxes</td>
-              <td style="text-align:center;font-weight:700;color:var(--navy);">${r.truckBoxes} boxes</td>
+              <td style="text-align:center;font-weight:700;color:var(--navy);">${r.truckDisplay}</td>
               <td style="text-align:center;font-weight:800;color:var(--gold);">${r.closingBoxes} boxes</td>
               <td style="text-align:right;font-weight:700;">${fmt(r.closingValue)}</td>
             </tr>`).join('')}
