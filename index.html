@@ -2689,10 +2689,12 @@ async function completeOrder() {
       product_id: item.product_id,
       name: item.name || '',
       quantity: item.totalBags || item.quantity || 1,
-      price: item.basePrice || item.price || 0,
+      price: item.uom === 'piece' ? (item.piecePrice || 0) : (item.basePrice || item.price || 0),
       total: item.total || 0,
-      display_unit: item.displayUnit || item.unit || 'Box',
+      display_unit: item.uom === 'piece' ? 'Piece' : (item.displayUnit || item.unit || 'Box'),
       uom: item.uom || 'box',
+      pieces: item.uom === 'piece' ? (item.pieces || 0) : 0,
+      piece_price: item.piecePrice || 0,
       bags_per_box: item.bagsPerBox || 4,
       is_foc: item.isFOC ? 1 : 0
     }));
