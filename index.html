@@ -1811,18 +1811,21 @@ function fmtStock(totalUnits, cpb) {
   return `${boxes} box${boxes !== 1 ? 'es' : ''} + ${rem} pc${rem !== 1 ? 's' : ''}`;
 }
 
-function fmtStockTruck(totalUnits, product) {
-  // Used for TRUCK & POS display - uses pieces_per_box
-  const ppb = parseInt(product?.pieces_per_box) || parseInt(product?.cases_per_box) || 4;
-  const cpb = parseInt(product?.cases_per_box) || 4;
-  if (totalUnits === 0) return '0 boxes';
-  // Convert from cases units to pieces units for display
-  const totalPieces = totalUnits * (ppb / cpb);
+function fmtTruckPieces(totalPieces, ppb) {
+  // Display truck stock stored as pieces
+  ppb = parseInt(ppb) || 4;
+  totalPieces = Math.round(totalPieces || 0);
+  if (totalPieces === 0) return '0 boxes';
   const boxes = Math.floor(totalPieces / ppb);
-  const rem = Math.round(totalPieces % ppb);
+  const rem = totalPieces % ppb;
   if (boxes === 0) return `${rem} pc${rem !== 1 ? 's' : ''}`;
   if (rem === 0) return `${boxes} box${boxes !== 1 ? 'es' : ''}`;
   return `${boxes} box${boxes !== 1 ? 'es' : ''} + ${rem} pc${rem !== 1 ? 's' : ''}`;
+}
+
+function fmtStockTruck(totalPieces, product) {
+  const ppb = parseInt(product?.pieces_per_box) || parseInt(product?.cases_per_box) || 4;
+  return fmtTruckPieces(totalPieces, ppb);
 }
 // ── EMPLOYEE MANAGEMENT (Supabase-synced) ──
 let _empCache = null; // local cache to avoid repeated fetches
@@ -2196,7 +2199,7 @@ function renderPOSProducts(products) {
     const stock = p.truckQty || 0;
     const cpb = getCasesPerBox(p);
     const ppb = parseInt(p.pieces_per_box) || cpb; // pieces per box for display
-    const stockFmt = fmtStock(stock, getCasesPerBox(p));
+    const stockFmt = fmtStockTruck(stock, p);
     const whFmt = fmtStock(p.warehouseQty || 0, cpb);
     const pcPrice = parseFloat((p.selling_price / ppb).toFixed(3));
     const cls = stock <= 0 ? 'out-stock' : stock <= (p.low_stock_threshold || 10) ? 'low-stock' : '';
@@ -2270,15 +2273,17 @@ function toggleFOC(idx, checked) {
 async function addToCart(productId) {
   const p = (window._posProducts || []).find(x => x.product_id === productId);
   if (!p) return;
-  const truckBags = p.truckQty || 0;
-  if (truckBags <= 0) { showToast('⚠️ Out of stock!'); return; }
+  const truckPieces = p.truckQty || 0; // now stored as pieces
+  if (truckPieces <= 0) { showToast('⚠️ Out of stock!'); return; }
   const bpb = getCasesPerBox(p);
-  const bagPrice = parseFloat((p.selling_price / bpb).toFixed(3));
+  const ppb = parseInt(p.pieces_per_box) || bpb;
+  const bagPrice = parseFloat((p.selling_price / ppb).toFixed(3));
   const existing = cart.find(c => c.product_id === productId && !c.isFOC);
   if (existing) {
     const step = existing.uom === 'bag' ? 1 : bpb;
     const newBags = existing.totalBags + step;
-    if (newBags > truckBags) { showToast('⚠️ Not enough stock!'); return; }
+    const newPieces = Math.round(newBags * (ppb/bpb));
+    if (newPieces > truckPieces) { showToast('⚠️ Not enough stock!'); return; }
     existing.totalBags = newBags;
     existing.quantity = newBags;
     const boxes = Math.floor(newBags / bpb);
@@ -2300,8 +2305,9 @@ async function addToCart(productId) {
       displayUnit: p.unit || 'Box',
       uom: 'box',
       bagsPerBox: bpb,
+      piecesPerBox: ppb,
       isFOC: false,
-      maxQty: truckBags
+      maxQty: truckPieces // in pieces
     });
   }
   renderCart();
@@ -2325,7 +2331,9 @@ function addBoxes(idx, delta) {
   const bagRem = item.totalBags % bpb; // preserve existing extra bags
   const newTotalBags = Math.max(0, Math.floor(item.totalBags / bpb) + delta) * bpb + bagRem;
   if (newTotalBags <= 0 && delta < 0) { removeFromCart(idx); return; }
-  if (newTotalBags > item.maxQty) { showToast(`⚠️ Only ${fmtStock(item.maxQty, bpb)} in truck!`); return; }
+  const ppbChk = item.piecesPerBox || bpb;
+  const newPiecesChk = Math.round(newTotalBags * (ppbChk/bpb));
+  if (newPiecesChk > item.maxQty) { showToast(`⚠️ Only ${fmtTruckPieces(item.maxQty, ppbChk)} in truck!`); return; }
   item.totalBags = newTotalBags;
   item.quantity = newTotalBags;
   item.uom = bagRem > 0 ? 'mixed' : 'box';
@@ -2344,7 +2352,9 @@ function addBags(idx, delta) {
   const bpb = item.bagsPerBox || 4;
   const newTotalBags = item.totalBags + delta;
   if (newTotalBags <= 0) { removeFromCart(idx); return; }
-  if (newTotalBags > item.maxQty) { showToast(`⚠️ Only ${fmtStock(item.maxQty, bpb)} in truck!`); return; }
+  const ppbB = item.piecesPerBox || bpb;
+  const newPiecesB = Math.round(newTotalBags * (ppbB/bpb));
+  if (newPiecesB > item.maxQty) { showToast(`⚠️ Only ${fmtTruckPieces(item.maxQty, ppbB)} in truck!`); return; }
   item.totalBags = newTotalBags;
   item.quantity = newTotalBags;
   item.uom = 'mixed';
@@ -2361,18 +2371,22 @@ function renderCart() {
   if (cart.length === 0) { section.style.display = 'none'; updateCartSummary(); return; }
   section.style.display = 'block';
   itemsDiv.innerHTML = cart.map((item, i) => {
-    const bpb = item.bagsPerBox || 4;
-    const stockBoxes = Math.floor((item.maxQty||0)/bpb);
-    const stockRem = (item.maxQty||0) % bpb;
+    const bpb = item.bagsPerBox || 4; // cases per box (for stock math)
+    const ppb = item.piecesPerBox || bpb; // pieces per box (for display)
+    // Truck stock IS stored in pieces now
+    const maxPieces = item.maxQty || 0; // already in pieces
+    const stockBoxes = Math.floor(maxPieces / ppb);
+    const stockRem = maxPieces % ppb;
     const stockFmt = stockBoxes > 0
-      ? stockBoxes + ' box' + (stockBoxes!==1?'es':'') + (stockRem>0?' + '+stockRem+' bag'+(stockRem!==1?'s':''):'')
-      : ((item.maxQty||0) + ' bags');
-    const boxes = Math.floor((item.totalBags||0)/bpb);
-    const rem = (item.totalBags||0) % bpb;
-    // Display: "3 boxes + 2 bags" or "3 boxes" or "2 bags"
+      ? stockBoxes + ' box' + (stockBoxes!==1?'es':'') + (stockRem>0?' + '+stockRem+' pc'+(stockRem!==1?'s':''):'')
+      : (maxPieces + ' pcs');
+    // totalBags in cart = cases units; convert to pieces for display
+    const totalPieces = Math.round((item.totalBags||0) * (ppb/bpb));
+    const boxes = Math.floor(totalPieces / ppb);
+    const rem = totalPieces % ppb;
     const qtyDisplay = boxes > 0
       ? boxes + ' box' + (boxes!==1?'es':'') + (rem>0?' + '+rem+' pc'+(rem!==1?'s':''):'')
-      : (rem + ' pc' + (rem!==1?'s':''));
+      : (totalPieces + ' pc' + (totalPieces!==1?'s':''));
     const priceDisplay = item.isFOC
       ? '<span style="color:var(--green);font-weight:700;">FREE (FOC)</span>'
       : `<span style="color:var(--navy);font-weight:700;">${fmtMoney(item.basePrice)}/box</span>`
@@ -2585,35 +2599,31 @@ async function completeOrder() {
     } catch(_e) {}
     // Save items & update inventory
     for (const item of cart) {
+      const bpb = item.bagsPerBox || getCasesPerBox(prodMap?.[item.product_id]) || 4;
+      const ppb = item.piecesPerBox || bpb; // pieces per box
       const bagsToDeduct = item.totalBags || item.quantity || 1;
+      // Convert bags to pieces for truck stock (truck stores in pieces)
+      const piecesToDeduct = Math.round(bagsToDeduct * (ppb / bpb));
       const itemData = {
         invoice_id: invId,
         product_id: item.product_id,
         name: item.name || '',
-        quantity: bagsToDeduct,
+        quantity: bagsToDeduct, // keep as bags for finance calculations
         price: item.basePrice || item.price || 0,
-        cost: item.cost ? (item.cost / (item.bagsPerBox || getCasesPerBox(prodMap?.[item.product_id]) || 1)) : 0,
+        cost: item.cost ? (item.cost / bpb) : 0,
         total: item.total || 0
       };
-      try { itemData.display_unit = item.uom === 'piece' ? 'Piece' : (item.displayUnit || item.unit || 'Box'); } catch(e){}
+      try { itemData.display_unit = item.displayUnit || item.unit || 'Box'; } catch(e){}
       try { itemData.uom = item.uom || 'box'; } catch(e){}
       try { itemData.is_foc = item.isFOC ? 1 : 0; } catch(e){}
-      try { if (item.uom === 'piece') { itemData.pieces = item.pieces || 1; itemData.piece_price = item.piecePrice || 0; } } catch(e){}
+      try { itemData.pieces_per_box = ppb; } catch(e){}
       await dbAdd('invoice_items', itemData);
-      // Deduct from THIS employee's truck stock (settings-based)
+      // Deduct from truck in PIECES (truck stores pieces)
       const _saleOwner = getCurrentTruckOwner();
       const _truckStock = await loadTruckStock(_saleOwner);
-      _truckStock[item.product_id] = Math.max(0, (_truckStock[item.product_id] || 0) - bagsToDeduct);
+      _truckStock[item.product_id] = Math.max(0, (_truckStock[item.product_id] || 0) - piecesToDeduct);
       await saveTruckStock(_saleOwner, _truckStock);
-      // Also deduct from warehouse_stock in Supabase (so Finance shows correct stock)
-      try {
-        const { data: whSale } = await sb.from('warehouse_stock').select('quantity').eq('product_id', item.product_id);
-        if (whSale && whSale.length > 0) {
-          const newWHQty = Math.max(0, parseFloat(whSale[0].quantity || 0) - bagsToDeduct);
-          await sb.from('warehouse_stock').update({ quantity: newWHQty, last_updated: new Date().toISOString() }).eq('product_id', item.product_id);
-          delete localCache['warehouse_stock'];
-        }
-      } catch(e) { console.warn('WH sale deduct failed:', e.message); }
+      // Warehouse NOT affected by sales (only by truck load/return)
     }
     // Update customer credit
     if (custId && (payType === 'credit' || payType === 'partial')) {
@@ -2657,6 +2667,7 @@ async function completeOrder() {
       display_unit: item.displayUnit || item.unit || 'Box',
       uom: item.uom || 'box',
       bags_per_box: item.bagsPerBox || 4,
+      pieces_per_box: item.piecesPerBox || item.bagsPerBox || 4,
       is_foc: item.isFOC ? 1 : 0
     }));
     const customer = custId ? await dbGet('customers', custId) : null;
@@ -2734,7 +2745,7 @@ async function loadInventory() {
       const cpb=getCasesPerBox(p);
       const truckCases=invMap[p.product_id]?.quantity||0;
       const whCases=calcWH(p.product_id);
-      const truckFmt=fmtStock(truckCases,cpb);
+      const truckFmt=fmtStockTruck(truckCases,p);
       const whFmt=fmtStock(whCases,cpb);
       const cls=truckCases<=0?'out':truckCases<=(p.low_stock_threshold||10)?'low':'';
       const imgHtml=p.photo?`<img class="inv-photo" src="${p.photo}" alt="${p.name}">`:`<div class="inv-photo-placeholder">${p.icon||'📦'}</div>`;
@@ -5830,19 +5841,20 @@ function _buildA4PDF(invoice, items, customer, prodMap) {
     const pid = parseInt(it.product_id)||it.product_id;
     const p = prodMap[pid]||prodMap[String(it.product_id)]||{};
     const bpb = (p&&p.cases_per_box)||it.bags_per_box||4;
+    const ppb = (p&&p.pieces_per_box)||it.pieces_per_box||bpb; // pieces per box for display
     const nm = (p&&p.name)||it.name||'';
     const bc = (p&&p.barcode)||'';
-    const totalQty = parseFloat(it.quantity||0);
-    const boxes = Math.floor(totalQty / bpb);
-    const remPcs = Math.round(totalQty % bpb);
-    // Unit: Box when full boxes, Piece when remainder or only pieces
+    const totalQty = parseFloat(it.quantity||0); // stored as cases units
+    // Convert to pieces for display
+    const totalPieces = Math.round(totalQty * (ppb/bpb));
+    const boxes = Math.floor(totalPieces / ppb);
+    const remPcs = totalPieces % ppb;
     const unit = boxes > 0 && remPcs > 0 ? 'Box+Pc' : boxes > 0 ? 'Box' : 'Piece';
     const qtyVal = boxes > 0 && remPcs > 0
       ? boxes + '+' + remPcs
-      : boxes > 0 ? String(boxes) : String(remPcs || Math.round(totalQty));
+      : boxes > 0 ? String(boxes) : String(remPcs || totalPieces);
     const boxPrice = parseFloat(it.price||0);
-    const pcPrice = bpb > 0 ? boxPrice / bpb : boxPrice;
-    // Show piece price when selling pieces only, box price when selling boxes
+    const pcPrice = ppb > 0 ? boxPrice / ppb : boxPrice;
     const displayPrice = boxes === 0 ? pcPrice.toFixed(3) : boxPrice.toFixed(2);
     const amt   = it.is_foc?'':parseFloat(it.total||0).toFixed(2);
     const foc   = it.is_foc?qtyVal:'';
@@ -6475,8 +6487,8 @@ async function loadTruckScreen() {
     const cpb = getCasesPerBox(p);
     const truckQty = truckStock[p.product_id] || 0;
     const whQty = calcWH(p.product_id);
-    const truckFmt = fmtStock(truckQty, getCasesPerBox(p)); // truck: uses pieces_per_box
-    const whFmt = fmtStock(whQty, cpb); // warehouse: uses cases_per_box
+    const truckFmt = fmtStockTruck(truckQty, p);
+    const whFmt = fmtStock(whQty, cpb);
     const imgHtml = p.photo ? `<img class="inv-photo" src="${p.photo}" alt="${p.name}">` : `<div class="inv-photo-placeholder">${p.icon||'📦'}</div>`;
     const truckColor = truckQty <= 0 ? 'color-red' : truckQty <= (p.low_stock_threshold||10) ? 'color-gold' : 'color-navy';
 
@@ -6608,15 +6620,19 @@ async function confirmTruckLoad() {
   }
   delete localCache['warehouse_stock'];
 
-  // Add to truck stock
+  // Add to truck stock IN PIECES (ppb units)
+  const allProds2 = await dbGetAll('products');
+  const prod2 = allProds2.find(p => p.product_id === productId);
+  const ppb2 = parseInt(prod2?.pieces_per_box) || cpb;
+  const piecesToAdd = boxes * ppb2; // boxes × pieces_per_box
   const truckStock = await loadTruckStock(owner);
-  truckStock[productId] = (truckStock[productId] || 0) + bags;
+  truckStock[productId] = (truckStock[productId] || 0) + piecesToAdd;
   await saveTruckStock(owner, truckStock);
 
   await saveTruckLoadLog(productId, '', bags, cpb, owner, 'load');
   closeModal('truckload-modal');
   loadTruckScreen();
-  showToast(`✅ ${fmtStock(bags,cpb)} loaded to ${owner} truck! Warehouse: ${fmtStock(newWhQty,cpb)} remaining`);
+  showToast(`✅ ${boxes} boxes (${piecesToAdd} pcs) loaded to ${owner} truck!`);
 }
 
 function openTruckReturnModal(productId, name, truckQty, cpb) {
@@ -6632,19 +6648,24 @@ async function confirmReturn() {
   const productId = parseInt(document.getElementById('ret-product-id').value);
   const boxes = parseInt(document.getElementById('ret-qty').value) || 0;
   if (boxes <= 0) { showToast('⚠️ Enter valid quantity!'); return; }
-  const cpb = parseInt(document.getElementById('ret-product-id').dataset.cpb) || 1;
-  const bags = boxes * cpb;  // convert boxes → bags
+  const cpb = parseInt(document.getElementById('ret-product-id').dataset.cpb) || 4;
+  const bags = boxes * cpb;  // for warehouse
   const owner = getCurrentTruckOwner();
 
-  // Check this owner's truck stock
+  // Get pieces_per_box for truck calculation
+  const allProds3 = await dbGetAll('products');
+  const prod3 = allProds3.find(p => p.product_id === productId);
+  const ppb3 = parseInt(prod3?.pieces_per_box) || cpb;
+  const piecesToReturn = boxes * ppb3; // pieces to remove from truck
+
   const truckStock = await loadTruckStock(owner);
   const currentTruck = truckStock[productId] || 0;
-  if (bags > currentTruck) {
-    showToast(`⚠️ Only ${fmtStock(currentTruck, cpb)} in truck!`); return;
+  if (piecesToReturn > currentTruck) {
+    showToast(`⚠️ Only ${fmtTruckPieces(currentTruck, ppb3)} in truck!`); return;
   }
 
-  // Deduct from truck
-  truckStock[productId] = currentTruck - bags;
+  // Deduct from truck (in pieces)
+  truckStock[productId] = currentTruck - piecesToReturn;
   await saveTruckStock(owner, truckStock);
 
   // Add back to warehouse — direct update
@@ -7690,7 +7711,12 @@ async function approveRequest(reqId) {
       );
     }
     delete localCache['warehouse_stock'];
-    truckStock[line.product_id] = (truckStock[line.product_id]||0) + line.bags;
+    // Add to truck in PIECES
+    const allProdsAR = await dbGetAll('products');
+    const prodAR = allProdsAR.find(p => p.product_id === parseInt(line.product_id));
+    const ppbAR = parseInt(prodAR?.pieces_per_box) || line.cpb || 4;
+    const piecesAR = (line.boxes || Math.floor(line.bags / line.cpb)) * ppbAR;
+    truckStock[line.product_id] = (truckStock[line.product_id]||0) + piecesAR;
     await saveTruckLoadLog(line.product_id, line.product_name, line.bags, line.cpb, req.employee, 'load');
   }
   await saveTruckStock(req.employee, truckStock);
