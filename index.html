@@ -1628,7 +1628,10 @@ async function dbAdd(table, data) {
     ]);
     const rows = result?.data;
     const error = result?.error;
-    if (error) throw new Error(error.message);
+    if (error) {
+      console.error(`dbAdd ${table} error:`, error.message, '| Data keys:', Object.keys(safeData).join(','));
+      throw new Error(error.message);
+    }
     const res = Array.isArray(rows) ? rows[0] : rows;
     if (res) {
       const plain = JSON.parse(JSON.stringify(res));
@@ -4272,12 +4275,15 @@ async function saveProduct() {
     cases_per_box: parseInt(document.getElementById('prod-bags-per-box').value) || 4,
     pieces_per_bag: parseInt(document.getElementById('prod-pieces-per-bag').value) || 1,
     low_stock_threshold: parseInt(document.getElementById('prod-low').value) || 10,
-    icon: document.getElementById('prod-icon').value || '📦',
-    barcode: document.getElementById('prod-barcode').value.trim() || null,
-    photo: document.getElementById('prod-photo-data').value || null,
   };
+  // Try optional columns — only add if they don't cause issues
+  const icon = document.getElementById('prod-icon').value || '📦';
+  const barcode = document.getElementById('prod-barcode').value.trim() || null;
+  const photoData = document.getElementById('prod-photo-data').value || null;
+  if (icon) data.icon = icon;
+  if (barcode) data.barcode = barcode;
   // Handle photo separately - store in localStorage to avoid Supabase size limits
-  const photoData = data.photo;
+  // photoData already extracted above
   
   let productId;
   if (id) {
