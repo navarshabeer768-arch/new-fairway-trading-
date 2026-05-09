@@ -2272,9 +2272,8 @@ async function addToCart(productId) {
   if (!p) return;
   const truckBags = p.truckQty || 0;
   if (truckBags <= 0) { showToast('⚠️ Out of stock!'); return; }
-  const bpb = getCasesPerBox(p); // cases per box for stock math
-  const ppb = parseInt(p.pieces_per_box) || bpb; // pieces per box for price display
-  const bagPrice = parseFloat((p.selling_price / ppb).toFixed(3)); // price per piece
+  const bpb = getCasesPerBox(p);
+  const bagPrice = parseFloat((p.selling_price / bpb).toFixed(3));
   const existing = cart.find(c => c.product_id === productId && !c.isFOC);
   if (existing) {
     const step = existing.uom === 'bag' ? 1 : bpb;
@@ -2291,13 +2290,10 @@ async function addToCart(productId) {
       name: p.name,
       price: p.selling_price,
       bagPrice,
-      piecePrice,
       basePrice: p.selling_price,
       cost: p.cost_price,
       quantity: bpb,
       totalBags: bpb,
-      pieces: 0,
-      piecesPerBag: ppb,
       total: p.selling_price,
       icon: p.icon || '📦',
       unit: p.unit || 'Box',
