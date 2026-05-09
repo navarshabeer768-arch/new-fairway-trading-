@@ -2219,7 +2219,7 @@ function setCartUOM(idx, uom) {
   item.uom = uom;
   if (uom === 'bag') {
     item.price = item.bagPrice || parseFloat((item.basePrice / bpb).toFixed(3));
-    item.displayUnit = 'Bag';
+    item.displayUnit = 'Piece';
   } else {
     item.price = item.basePrice;
     item.displayUnit = item.unit || 'Box';
@@ -4237,6 +4237,44 @@ async function saveProduct() {
   if (id) {
     data.product_id = parseInt(id);
     const existing = await dbGet('products', data.product_id);
+    const oldCpb = parseInt(existing?.cases_per_box) || 4;
+    const newCpb = data.cases_per_box;
+
+    // If cases_per_box changed, rescale all stored quantities so box count stays same
+    if (oldCpb !== newCpb) {
+      const confirmed = safeConfirm(
+        `⚠️ Pieces per Box changed from ${oldCpb} to ${newCpb}.\n\nThis will rescale all stock quantities so box count stays correct.\n\nContinue?`
+      );
+      if (!confirmed) return;
+      // Scale factor: new stored qty = old stored qty × (newCpb / oldCpb)
+      const scaleFactor = newCpb / oldCpb;
+      try {
+        // Rescale truck stocks in settings
+        const allSettings = await dbGetAll('settings');
+        for (const row of allSettings) {
+          if (row.key && row.key.startsWith('truck_stock_')) {
+            try {
+              const obj = JSON.parse(row.value || '{}');
+              if (obj[data.product_id] !== undefined) {
+                obj[data.product_id] = Math.round(obj[data.product_id] * scaleFactor);
+                await sb.from('settings').update({ value: JSON.stringify(obj) }).eq('key', row.key);
+              }
+            } catch(e) {}
+          }
+        }
+        // Rescale warehouse_stock
+        const { data: whRows } = await sb.from('warehouse_stock').select('*').eq('product_id', data.product_id);
+        if (whRows && whRows.length > 0) {
+          const newQty = Math.round(whRows[0].quantity * scaleFactor);
+          await sb.from('warehouse_stock').update({ quantity: newQty, last_updated: new Date().toISOString() }).eq('product_id', data.product_id);
+        }
+        delete localCache['warehouse_stock'];
+        delete localCache['settings'];
+        showToast(`✅ Stock rescaled: ${oldCpb}→${newCpb} pcs/box`);
+      } catch(e) {
+        console.warn('Stock rescale error:', e);
+      }
+    }
     // Save without photo to Supabase (avoid row size limit)
     const dataForDB = {...data};
     delete dataForDB.photo;
@@ -5225,10 +5263,11 @@ function printA4Invoice(invoice, items, customer, prodMap) {
     const totalBags = it.quantity || 0;
     const boxes = Math.floor(totalBags / bpb);
     const remBags = totalBags % bpb;
-    const unit = boxes > 0 && remBags > 0 ? 'Box + Bag' : boxes > 0 ? 'Box' : 'Bag';
+    const unit = boxes > 0 && remBags > 0 ? 'Box + Pc' : boxes > 0 ? 'Box' : 'Piece';
     const qtyVal = remBags > 0 ? (boxes > 0 ? boxes + ' + ' + remBags : remBags + '') : (boxes + '');
+    const unitPrice = boxes === 0 ? (parseFloat(it.price||0) / bpb).toFixed(3) : parseFloat(it.price||0).toFixed(2);
     const qty = it.is_foc ? '' : qtyVal;
-    const price = it.is_foc ? '' : parseFloat(it.price||0).toFixed(2);
+    const price = it.is_foc ? '' : unitPrice;
     const amount = it.is_foc ? '' : parseFloat(it.total||0).toFixed(2);
     const foc = it.is_foc ? qtyVal : '';
     return `<tr style="height:32px;"><td>${i+1}</td><td>${barcode}</td><td class="desc">${productName}</td><td>${unit}</td><td>${qty}</td><td>${foc}</td><td>${price}</td><td>${amount}</td></tr>`;
