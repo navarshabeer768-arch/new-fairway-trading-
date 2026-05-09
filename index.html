@@ -4268,7 +4268,6 @@ async function saveProduct() {
     category: document.getElementById('prod-cat').value,
     cost_price: cost,
     selling_price: sell,
-    stock_quantity: stockQty,
     unit: document.getElementById('prod-unit').value,
     cases_per_box: parseInt(document.getElementById('prod-bags-per-box').value) || 4,
     pieces_per_bag: parseInt(document.getElementById('prod-pieces-per-bag').value) || 1,
@@ -4276,7 +4275,6 @@ async function saveProduct() {
     icon: document.getElementById('prod-icon').value || '📦',
     barcode: document.getElementById('prod-barcode').value.trim() || null,
     photo: document.getElementById('prod-photo-data').value || null,
-    created_at: new Date().toISOString()
   };
   // Handle photo separately - store in localStorage to avoid Supabase size limits
   const photoData = data.photo;
@@ -4285,7 +4283,6 @@ async function saveProduct() {
   if (id) {
     data.product_id = parseInt(id);
     const existing = await dbGet('products', data.product_id);
-    data.created_at = existing.created_at;
     // Save without photo to Supabase (avoid row size limit)
     const dataForDB = {...data};
     delete dataForDB.photo;
