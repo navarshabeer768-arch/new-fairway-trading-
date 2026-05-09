@@ -2167,12 +2167,14 @@ async function loadPOSScreen() {
     } catch(e) {}
   }
   const invMap = await getMyTruckQtyMap(); // settings-based truck stock
-  let wh = await dbGetAll('warehouse_stock');
-  if (!wh || wh.length === 0) {
-    try {
-      const { data: whDirect } = await sb.from('warehouse_stock').select('*');
-      if (whDirect) { localCache['warehouse_stock'] = whDirect; wh = whDirect; }
-    } catch(e) {}
+  // Always fetch fresh from Supabase — never use stale cache
+  delete localCache['warehouse_stock'];
+  let wh = [];
+  try {
+    const { data: whDirect } = await sb.from('warehouse_stock').select('*');
+    if (whDirect) { localCache['warehouse_stock'] = whDirect; wh = whDirect; }
+  } catch(e) {
+    wh = await dbGetAll('warehouse_stock');
   }
   const whMap = {};
   wh.forEach(w => whMap[w.product_id] = w.quantity);
@@ -2686,7 +2688,7 @@ async function completeOrder() {
       try {
         const prods = await dbGetAll('products');
         const invMap = await getMyTruckQtyMap(); // settings-based truck stock
-        const wh = await dbGetAll('warehouse_stock');
+        let wh = []; try { delete localCache['warehouse_stock']; const {data:_whd} = await sb.from('warehouse_stock').select('*'); if(_whd){localCache['warehouse_stock']=_whd;wh=_whd;} } catch(e){ wh=await dbGetAll('warehouse_stock'); }
         const whMap = {}; wh.forEach(w => whMap[w.product_id] = w.quantity);
         window._posProducts = prods.map(p => ({...p, truckQty: invMap[p.product_id]||0, warehouseQty: whMap[p.product_id]||0}));
       } catch(e) {}
@@ -2862,7 +2864,7 @@ async function loadStockCountSheet() {
     scOwner = localStorage.getItem('employee_name') || 'Admin';
   }
   const truckStock = await loadTruckStock(scOwner);
-  const wh = await dbGetAll('warehouse_stock');
+  let wh = []; try { delete localCache['warehouse_stock']; const {data:_whd} = await sb.from('warehouse_stock').select('*'); if(_whd){localCache['warehouse_stock']=_whd;wh=_whd;} } catch(e){ wh=await dbGetAll('warehouse_stock'); }
   const invMap = truckStock; // already {product_id: qty}
   const whMap = {}; wh.forEach(w => whMap[w.product_id] = w.quantity);
   const list = document.getElementById('stock-count-list');
@@ -4631,7 +4633,7 @@ async function loadStockCount(mode) {
   // Load truck stock from settings (per-employee)
   const truckStock = await loadTruckStock(scOwner);
   const truckMap = {}; Object.entries(truckStock).forEach(([pid,qty]) => truckMap[parseInt(pid)] = qty||0);
-  const wh = await dbGetAll('warehouse_stock');
+  let wh = []; try { delete localCache['warehouse_stock']; const {data:_whd} = await sb.from('warehouse_stock').select('*'); if(_whd){localCache['warehouse_stock']=_whd;wh=_whd;} } catch(e){ wh=await dbGetAll('warehouse_stock'); }
   const whMap = {}; wh.forEach(i=>whMap[i.product_id]=i.quantity||0);
   const list = document.getElementById('stockcount-list');
   if (!list) return;
@@ -4951,7 +4953,7 @@ async function printStockCount() {
   const s = settings;
   const prods = await dbGetAll('products');
   const truck = await dbGetAll('inventory');
-  const wh = await dbGetAll('warehouse_stock');
+  let wh = []; try { delete localCache['warehouse_stock']; const {data:_whd} = await sb.from('warehouse_stock').select('*'); if(_whd){localCache['warehouse_stock']=_whd;wh=_whd;} } catch(e){ wh=await dbGetAll('warehouse_stock'); }
   const truckMap = {}; truck.forEach(i=>truckMap[i.product_id]=i.quantity||0);
   const whMap = {}; wh.forEach(i=>whMap[i.product_id]=i.quantity||0);
   const mode = currentStockCountMode;
@@ -6083,7 +6085,7 @@ function closeInvoiceViewer() {
         try {
           const prods = await dbGetAll('products');
           const inv = await dbGetAll('inventory');
-          const wh = await dbGetAll('warehouse_stock');
+          let wh = []; try { delete localCache['warehouse_stock']; const {data:_whd} = await sb.from('warehouse_stock').select('*'); if(_whd){localCache['warehouse_stock']=_whd;wh=_whd;} } catch(e){ wh=await dbGetAll('warehouse_stock'); }
           const invMap = {}; inv.forEach(i => invMap[i.product_id] = i.quantity);
           const whMap = {}; wh.forEach(w => whMap[w.product_id] = w.quantity);
           window._posProducts = prods.map(p => ({...p, truckQty: invMap[p.product_id]||0, warehouseQty: whMap[p.product_id]||0}));
