@@ -5849,11 +5849,18 @@ function _buildA4PDF(invoice, items, customer, prodMap) {
   const tableBody = items.map((it, i) => {
     const pid = parseInt(it.product_id)||it.product_id;
     const p = prodMap[pid]||prodMap[String(it.product_id)]||{};
-    const ppb = parseInt(it.pieces_per_box) || (p&&p.pieces_per_box) || (p&&p.cases_per_box) || 4;
+    const bpb = (p&&p.cases_per_box)||4;
+    const ppb = parseInt(it.pieces_per_box)||(p&&p.pieces_per_box)||bpb;
     const nm = (p&&p.name)||it.name||'';
     const bc = (p&&p.barcode)||'';
-    // quantity is now stored as pieces
-    const totalPieces = Math.round(parseFloat(it.quantity||0));
+    const rawQty = parseFloat(it.quantity||0);
+    // Detect if quantity is stored as pieces or bags
+    // If uom='piece' or pieces_per_box saved → already in pieces
+    // Otherwise (old invoices) → in bags, convert to pieces
+    const isPieceStore = (it.uom === 'piece') || (it.pieces_per_box > 0);
+    const totalPieces = isPieceStore
+      ? Math.round(rawQty)
+      : Math.round(rawQty * (ppb / bpb));
     const boxes = Math.floor(totalPieces / ppb);
     const remPcs = totalPieces % ppb;
     const unit = boxes > 0 && remPcs > 0 ? 'Box+Pc' : boxes > 0 ? 'Box' : 'Piece';
