@@ -2346,6 +2346,29 @@ function addBoxes(idx, delta) {
   renderCart();
 }
 
+function setPieceDirect(idx, val) {
+  const item = cart[idx];
+  const bpb = item.bagsPerBox || 4;
+  const ppb = item.piecesPerBox || bpb;
+  const newRemPcs = Math.max(0, parseInt(val) || 0);
+  // Keep existing boxes, replace remainder pieces
+  const currentPieces = Math.round((item.totalBags||0) * (ppb/bpb));
+  const currentBoxes = Math.floor(currentPieces / ppb);
+  const newTotalPieces = (currentBoxes * ppb) + newRemPcs;
+  if (newTotalPieces <= 0) { removeFromCart(idx); return; }
+  if (newTotalPieces > item.maxQty) {
+    showToast(`⚠️ Only ${fmtTruckPieces(item.maxQty, ppb)} in truck!`);
+    renderCart(); return;
+  }
+  item.totalBags = newTotalPieces * (bpb/ppb);
+  item.quantity = item.totalBags;
+  const boxes = Math.floor(newTotalPieces / ppb);
+  const remPcs = newTotalPieces % ppb;
+  const pcPrice = item.bagPrice || item.basePrice / ppb;
+  item.total = item.isFOC ? 0 : (boxes * item.basePrice) + (remPcs * pcPrice);
+  renderCart();
+}
+
 function addPieces(idx, delta) { /* removed */ }
 function togglePieceMode(idx) { /* removed */ }
 
@@ -2413,11 +2436,15 @@ function renderCart() {
           <span style="min-width:52px;text-align:center;font-weight:800;font-size:.9rem;padding:0 4px;">${boxes} box${boxes!==1?'es':''}</span>
           <button onclick="addBoxes(${i},1)" style="width:36px;height:36px;border:none;background:none;font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--navy);">+</button>
         </div>
-        <!-- Piece (was bag) controls -->
-        ${bpb>1?`<div style="display:flex;align-items:center;gap:0;background:var(--surface2);border-radius:8px;overflow:hidden;border:1px solid var(--border);">
-          <button onclick="addBags(${i},-1)" style="width:28px;height:36px;border:none;background:none;font-size:1rem;font-weight:700;cursor:pointer;color:var(--text2);">−</button>
-          <span style="min-width:48px;text-align:center;font-weight:700;font-size:.8rem;color:var(--text2);">${rem} pc${rem!==1?'s':''}</span>
-          <button onclick="addBags(${i},1)" style="width:28px;height:36px;border:none;background:none;font-size:1rem;font-weight:700;cursor:pointer;color:var(--text2);">+</button>
+        <!-- Piece controls with typeable input -->
+        ${bpb>1?`<div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:.75rem;font-weight:700;color:var(--text2);">pcs:</span>
+          <button onclick="addBags(${i},-1)" style="width:28px;height:32px;border:1px solid var(--border);background:var(--surface2);border-radius:6px 0 0 6px;font-size:1rem;font-weight:700;cursor:pointer;color:var(--text2);">−</button>
+          <input type="number" min="0" value="${rem}" 
+            onchange="setPieceDirect(${i}, this.value)"
+            onclick="this.select()"
+            style="width:48px;height:32px;border:1px solid var(--border);border-left:none;border-right:none;text-align:center;font-weight:800;font-size:.9rem;color:var(--navy);outline:none;padding:0;">
+          <button onclick="addBags(${i},1)" style="width:28px;height:32px;border:1px solid var(--border);background:var(--surface2);border-radius:0 6px 6px 0;font-size:1rem;font-weight:700;cursor:pointer;color:var(--text2);">+</button>
         </div>`:''}
         <!-- FOC toggle -->
         <label style="display:flex;align-items:center;gap:3px;font-size:.75rem;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:auto;">
