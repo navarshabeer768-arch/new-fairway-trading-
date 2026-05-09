@@ -1500,6 +1500,7 @@ input[type=number]{-moz-appearance:textfield;}
           <option value="">👥 All Employees</option>
         </select>
         <button class="btn btn-outline btn-sm" onclick="printHandoverReport()">🖨️ Print</button>
+        <button class="btn btn-outline btn-sm" onclick="cleanDuplicateHandovers()" style="color:var(--red);border-color:var(--red);">🗑️ Clean Duplicates</button>
       </div>
       <div id="handover-admin-list"></div>
       <div style="margin-top:12px;">
@@ -7595,10 +7596,34 @@ async function approveRequest(reqId) {
   // Handle batch request (multiple products) or single product
   const lines = req.lines || [{ product_id: req.product_id, product_name: req.product_name, boxes: req.boxes, bags: req.bags, cpb: req.cpb }];
 
-  // Check all lines have enough warehouse stock first (fresh from Supabase)
+  // ── Helper: calculate warehouse using Purchased - Sold - AllTrucks ──
+  async function getCalcWH(productId) {
+    const allItems = await dbGetAll('invoice_items');
+    const soldBags = allItems.filter(it => parseInt(it.product_id) === parseInt(productId))
+      .reduce((s, it) => s + parseFloat(it.quantity || 0), 0);
+    const poRaw = await dbGet('settings', 'fin_purchase_orders');
+    const poList = poRaw?.value ? JSON.parse(poRaw.value) : [];
+    let purchBags = 0;
+    poList.forEach(o => {
+      const ls = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box || 4 }];
+      ls.forEach(l => {
+        if (parseInt(l.posProductId || l.pos_product_id) === parseInt(productId))
+          purchBags += (parseInt(l.qty) || 0) * (parseInt(l.cpb) || 4);
+      });
+    });
+    const settingsAll = await dbGetAll('settings');
+    let allTruckBags = 0;
+    settingsAll.forEach(row => {
+      if (row.key?.startsWith('truck_stock_')) {
+        try { allTruckBags += parseFloat(JSON.parse(row.value || '{}')[productId] || 0); } catch(e) {}
+      }
+    });
+    return Math.max(0, purchBags - soldBags - allTruckBags);
+  }
+
+  // Check all lines have enough warehouse stock using calculated formula
   for (const line of lines) {
-    const { data: whCheck } = await sb.from('warehouse_stock').select('quantity').eq('product_id', line.product_id);
-    const whQty = whCheck && whCheck.length > 0 ? parseFloat(whCheck[0].quantity||0) : 0;
+    const whQty = await getCalcWH(line.product_id);
     if (line.bags > whQty) {
       showToast(`⚠️ Not enough stock for ${line.product_name}! Only ${fmtStock(whQty,line.cpb)} in warehouse.`);
       _approvingReqId = null;
@@ -7606,12 +7631,10 @@ async function approveRequest(reqId) {
     }
   }
 
-  // Approve all lines — deduct from warehouse, add to truck
+  // Approve all lines — deduct from warehouse_stock table, add to truck
   const truckStock = await loadTruckStock(req.employee);
   for (const line of lines) {
-    // Fresh fetch per product
-    const { data: whData } = await sb.from('warehouse_stock').select('*').eq('product_id', line.product_id);
-    const whQty = whData && whData.length > 0 ? parseFloat(whData[0].quantity||0) : 0;
+    const whQty = await getCalcWH(line.product_id);
     const newQty = Math.max(0, whQty - line.bags);
     try {
       const { error } = await sb.from('warehouse_stock')
@@ -7685,30 +7708,29 @@ async function updateApprovalBadge() {
 async function getHandovers() {
   const row = await dbGet('settings','cash_handovers');
   const all = row?.value ? JSON.parse(row.value) : [];
-  // Step 1: Deduplicate by id
+  // Deduplicate by id first
   const seenIds = new Set();
   const deduped = all.filter(h => {
     if (seenIds.has(String(h.id))) return false;
     seenIds.add(String(h.id));
     return true;
   });
-  // Step 2: Deduplicate by content fingerprint (same employee + amount + date + time = duplicate)
-  // Keep confirmed version if one exists, otherwise keep first
-  const grouped = {};
+  // Then group by employee+amount+date — keep confirmed or latest
+  const groups = {};
   deduped.forEach(h => {
-    const key = `${h.employee}|${h.amount}|${h.date}|${h.time}`;
-    if (!grouped[key]) {
-      grouped[key] = h;
-    } else {
-      // Keep confirmed over pending
-      if (h.confirmed && !grouped[key].confirmed) grouped[key] = h;
-    }
+    const key = `${h.employee}|${parseFloat(h.amount||0).toFixed(2)}|${h.date}`;
+    if (!groups[key]) { groups[key] = []; }
+    groups[key].push(h);
   });
-  return Object.values(grouped).sort((a,b) => {
-    // Sort by date desc, then time desc
-    if (b.date !== a.date) return b.date.localeCompare(a.date);
-    return (b.time||'').localeCompare(a.time||'');
+  const result = [];
+  Object.values(groups).forEach(group => {
+    const confirmed = group.filter(h => h.confirmed);
+    const keep = confirmed.length > 0
+      ? confirmed.sort((a,b) => b.id - a.id)[0]
+      : group.sort((a,b) => b.id - a.id)[0];
+    result.push(keep);
   });
+  return result.sort((a,b) => b.date.localeCompare(a.date) || (b.id - a.id));
 }
 
 async function openHandoverScreen() {
@@ -7892,6 +7914,48 @@ async function submitHandover() {
     const btn2 = document.querySelector('[onclick="submitHandover()"]');
     if (btn2) { btn2.disabled = false; btn2.textContent = '💵 Submit to Admin'; }
   }
+}
+
+async function cleanDuplicateHandovers() {
+  if (!safeConfirm('Remove duplicate handover entries?\n\nThis will keep one entry per submission and remove extras.')) return;
+  const row = await dbGet('settings','cash_handovers');
+  const all = row?.value ? JSON.parse(row.value) : [];
+
+  // Deduplicate: for same employee + amount + date, keep only ONE
+  // Priority: confirmed > most recent id
+  const groups = {};
+  all.forEach(h => {
+    // Group by employee + amount + date (ignore time — duplicates happen same day different times)
+    const key = `${h.employee}|${parseFloat(h.amount).toFixed(2)}|${h.date}`;
+    if (!groups[key]) {
+      groups[key] = [];
+    }
+    groups[key].push(h);
+  });
+
+  const cleaned = [];
+  let removedCount = 0;
+  Object.values(groups).forEach(group => {
+    if (group.length === 1) {
+      cleaned.push(group[0]);
+    } else {
+      // Keep confirmed one, or if multiple confirmed keep latest, or if all pending keep latest
+      const confirmed = group.filter(h => h.confirmed);
+      const keep = confirmed.length > 0
+        ? confirmed.sort((a,b) => b.id - a.id)[0]
+        : group.sort((a,b) => b.id - a.id)[0];
+      cleaned.push(keep);
+      removedCount += group.length - 1;
+    }
+  });
+
+  // Sort by date desc
+  cleaned.sort((a,b) => b.date.localeCompare(a.date) || (b.id - a.id));
+
+  // Save back to Supabase
+  await dbPut('settings', { key: 'cash_handovers', value: JSON.stringify(cleaned) });
+  showToast(`✅ Removed ${removedCount} duplicate${removedCount !== 1 ? 's' : ''}!`);
+  loadHandoverAdmin();
 }
 
 async function loadHandoverAdmin() {
