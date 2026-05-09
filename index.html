@@ -4271,12 +4271,12 @@ async function saveProduct() {
     category: document.getElementById('prod-cat').value,
     cost_price: cost,
     selling_price: sell,
+    stock_quantity: parseInt(document.getElementById('prod-stock').value) || 0,
     unit: document.getElementById('prod-unit').value,
     cases_per_box: parseInt(document.getElementById('prod-bags-per-box').value) || 4,
     pieces_per_bag: parseInt(document.getElementById('prod-pieces-per-bag').value) || 1,
     low_stock_threshold: parseInt(document.getElementById('prod-low').value) || 10,
   };
-  // Try optional columns — only add if they don't cause issues
   const icon = document.getElementById('prod-icon').value || '📦';
   const barcode = document.getElementById('prod-barcode').value.trim() || null;
   const photoData = document.getElementById('prod-photo-data').value || null;
