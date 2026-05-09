@@ -1701,7 +1701,7 @@ function mergeProductPhotos(products) {
 
 function getPK(table) {
   const pks = {
-    customers: 'customer_id', products: 'product_id', inventory: 'inventory_id',
+    customers: 'customer_id', products: 'product_id', inventory: 'id',
     invoices: 'invoice_id', invoice_items: 'id', expenses: 'id',
     credit_payments: 'payment_id', settings: 'key',
     warehouse_stock: 'warehouse_id', advance_orders: 'order_id'
@@ -1799,12 +1799,12 @@ function boxesBagsToTotal(boxes, bags, cpb) {
 function fmtStock(totalBags, cpb) {
   cpb = parseInt(cpb) || 4;
   if (totalBags === 0) return cpb > 1 ? '0 boxes' : '0';
-  if (cpb <= 1) return totalBags + ' bags';
+  if (cpb <= 1) return totalBags + ' pcs';
   const boxes = Math.floor(totalBags / cpb);
   const rem = totalBags % cpb;
-  if (boxes === 0) return `${rem} bag${rem !== 1 ? 's' : ''}`;
+  if (boxes === 0) return `${rem} pc${rem !== 1 ? 's' : ''}`;
   if (rem === 0) return `${boxes} box${boxes !== 1 ? 'es' : ''}`;
-  return `${boxes} box${boxes !== 1 ? 'es' : ''} + ${rem} bag${rem !== 1 ? 's' : ''}`;
+  return `${boxes} box${boxes !== 1 ? 'es' : ''} + ${rem} pc${rem !== 1 ? 's' : ''}`;
 }
 // ── EMPLOYEE MANAGEMENT (Supabase-synced) ──
 let _empCache = null; // local cache to avoid repeated fetches
@@ -2354,8 +2354,8 @@ function renderCart() {
     const rem = (item.totalBags||0) % bpb;
     // Display: "3 boxes + 2 bags" or "3 boxes" or "2 bags"
     const qtyDisplay = boxes > 0
-      ? boxes + ' box' + (boxes!==1?'es':'') + (rem>0?' + '+rem+' bag'+(rem!==1?'s':''):'')
-      : (rem + ' bag' + (rem!==1?'s':''));
+      ? boxes + ' box' + (boxes!==1?'es':'') + (rem>0?' + '+rem+' pc'+(rem!==1?'s':''):'')
+      : (rem + ' pc' + (rem!==1?'s':''));
     const priceDisplay = item.isFOC
       ? '<span style="color:var(--green);font-weight:700;">FREE (FOC)</span>'
       : `<span style="color:var(--navy);font-weight:700;">${fmtMoney(item.basePrice)}/box</span>`
@@ -2824,7 +2824,7 @@ async function adjustStock() {
     inv.last_updated = new Date().toISOString();
     await dbPut(table, inv);
   } else {
-    const pkField = location === 'warehouse' ? 'warehouse_id' : 'inventory_id';
+    const pkField = location === 'warehouse' ? 'warehouse_id' : 'id';
     await dbAdd(table, { product_id: productId, quantity: Math.max(0, qty), last_updated: new Date().toISOString() });
   }
   closeModal('stock-modal');
@@ -3467,7 +3467,7 @@ async function editInvoice() {
     const remBags = Math.round(bags % cpb);
     const qtyDisplay = ispiece && pieces > 0
       ? (pieces + ' piece' + (pieces!==1?'s':''))
-      : boxes > 0 ? (boxes + ' box' + (boxes!==1?'es':'') + (remBags>0?' + '+remBags+' bag'+(remBags!==1?'s':''):'')) : (bags + ' bag' + (bags!==1?'s':''));
+      : boxes > 0 ? (boxes + ' box' + (boxes!==1?'es':'') + (remBags>0?' + '+remBags+' bag'+(remBags!==1?'s':''):'')) : (bags + ' pc' + (bags!==1?'s':''));
     const priceDisplay = ispiece && piecePrice > 0
       ? `QR ${piecePrice.toFixed(3)}/piece`
       : `QR ${pricePerBox.toFixed(2)}/box (QR ${pricePerBag.toFixed(3)}/bag)`;
@@ -4586,7 +4586,7 @@ async function loadStockCount(mode) {
     const wqFmt = fmtStock(wq, cpb);
     totalTruck += tq; totalWH += wq;
     if (mode === 'truck') return `<div class="card" style="margin-bottom:8px;padding:12px;">
-      <div style="font-weight:700;font-size:.95rem;margin-bottom:8px;">${p.icon||'📦'} ${p.name} <span style="font-size:.75rem;color:var(--text2);font-weight:400;">· QR ${price.toFixed(2)}/box · ${cpb} bags/box</span></div>
+      <div style="font-weight:700;font-size:.95rem;margin-bottom:8px;">${p.icon||'📦'} ${p.name} <span style="font-size:.75rem;color:var(--text2);font-weight:400;">· QR ${price.toFixed(2)}/box · ${cpb} pcs/box</span></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;align-items:center;">
         <div style="text-align:center;">
           <div style="font-size:.6rem;color:var(--text2);margin-bottom:2px;">💻 System</div>
@@ -4620,7 +4620,7 @@ async function loadStockCount(mode) {
         </div>
       </div></div>`;
     if (mode === 'warehouse') return `<div class="card" style="margin-bottom:8px;padding:12px;">
-      <div style="font-weight:700;font-size:.95rem;margin-bottom:8px;">${p.icon||'📦'} ${p.name} <span style="font-size:.75rem;color:var(--text2);font-weight:400;">· QR ${price.toFixed(2)}/box · ${cpb} bags/box</span></div>
+      <div style="font-weight:700;font-size:.95rem;margin-bottom:8px;">${p.icon||'📦'} ${p.name} <span style="font-size:.75rem;color:var(--text2);font-weight:400;">· QR ${price.toFixed(2)}/box · ${cpb} pcs/box</span></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;align-items:center;">
         <div style="text-align:center;">
           <div style="font-size:.6rem;color:var(--text2);margin-bottom:2px;">💻 System</div>
@@ -4654,7 +4654,7 @@ async function loadStockCount(mode) {
         </div>
       </div></div>`;
     return `<div class="card" style="margin-bottom:8px;padding:12px;">
-      <div style="font-weight:700;font-size:.95rem;margin-bottom:6px;">${p.icon||'📦'} ${p.name} <span style="font-size:.75rem;color:var(--text2);font-weight:400;">· QR ${price.toFixed(2)} · ${cpb} bags/box</span></div>
+      <div style="font-weight:700;font-size:.95rem;margin-bottom:6px;">${p.icon||'📦'} ${p.name} <span style="font-size:.75rem;color:var(--text2);font-weight:400;">· QR ${price.toFixed(2)} · ${cpb} pcs/box</span></div>
       <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px;align-items:center;font-size:.75rem;text-align:center;">
         <div><div style="color:var(--text2);font-size:.55rem;">💻 Truck</div><div style="font-weight:900;color:var(--navy);font-size:.8rem;">${tqFmt}</div></div>
         <div><div style="color:var(--text2);font-size:.55rem;">📋 Boxes+Bags</div>
@@ -4712,7 +4712,7 @@ function checkTally(type, productId, systemQty, price, cpb) {
   const diffRem   = Math.abs(diff) % (cpb||1);
   const diffFmt = diff === 0 ? '✅ Match'
     : (diff > 0 ? '+' : '-') + (diffBoxes > 0 ? diffBoxes + ' box' + (diffBoxes>1?'es':'') : '')
-      + (diffRem > 0 ? (diffBoxes>0?' ':'') + diffRem + ' bag' + (diffRem>1?'s':'') : '')
+      + (diffRem > 0 ? (diffBoxes>0?' ':'') + diffRem + ' pc' + (diffRem>1?'s':'') : '')
       + (diff < 0 ? ' short' : ' extra');
   const color = diff === 0 ? 'var(--green)' : diff > 0 ? 'var(--gold)' : 'var(--red)';
   const varValue = Math.abs(diff) * ((price||0) / (cpb||1)); // value per bag × diff bags
@@ -6492,7 +6492,7 @@ async function loadTruckScreen() {
           ${imgHtml}
           <div style="flex:1;">
             <div style="font-weight:700;font-size:.92rem;">${p.name}</div>
-            <div style="font-size:.73rem;color:var(--text2);">${cpb} bags/box</div>
+            <div style="font-size:.73rem;color:var(--text2);">${cpb} pcs/box</div>
             <div style="display:flex;gap:12px;margin-top:4px;">
               <div style="text-align:center;"><div style="font-size:.85rem;font-weight:800;" class="${truckColor}">${truckFmt}</div><div style="font-size:.62rem;color:var(--text2);">🚛 My Truck</div></div>
               <div style="text-align:center;"><div style="font-size:.85rem;font-weight:800;color:var(--green);">${whFmt}</div><div style="font-size:.62rem;color:var(--text2);">🏭 Warehouse</div></div>
@@ -6532,7 +6532,7 @@ function openTruckLoadModal(productId, name, truckQty, whQty, cpb) {
   cpb = cpb || 1;
   document.getElementById('tl-product-id').value = productId;
   document.getElementById('tl-qty').value = '';
-  document.getElementById('tl-stock-info').innerHTML = `<strong>${name}</strong><br>🚛 Truck: <strong>${fmtStock(truckQty,cpb)}</strong> &nbsp;|&nbsp; 🏭 WH: <strong>${fmtStock(whQty,cpb)}</strong><br><small style="color:var(--text2);">Enter number of boxes to load (1 box = ${cpb} bags)</small>`;
+  document.getElementById('tl-stock-info').innerHTML = `<strong>${name}</strong><br>🚛 Truck: <strong>${fmtStock(truckQty,cpb)}</strong> &nbsp;|&nbsp; 🏭 WH: <strong>${fmtStock(whQty,cpb)}</strong><br><small style="color:var(--text2);">Enter number of boxes to load (1 box = ${cpb} pcs)</small>`;
   document.getElementById('tl-product-id').dataset.cpb = cpb;
   // Update button text based on role
   const btn = document.getElementById('tl-confirm-btn');
@@ -6608,7 +6608,7 @@ function openTruckReturnModal(productId, name, truckQty, cpb) {
   cpb = cpb || 1;
   document.getElementById('ret-product-id').value = productId;
   document.getElementById('ret-qty').value = '';
-  document.getElementById('ret-stock-info').innerHTML = `<strong>${name}</strong><br>🚛 Truck: <strong>${fmtStock(truckQty,cpb)}</strong><br><small style="color:var(--text2);">Enter number of BOXES to return (1 box = ${cpb} bags)</small>`;
+  document.getElementById('ret-stock-info').innerHTML = `<strong>${name}</strong><br>🚛 Truck: <strong>${fmtStock(truckQty,cpb)}</strong><br><small style="color:var(--text2);">Enter number of BOXES to return (1 box = ${cpb} pcs)</small>`;
   document.getElementById('ret-product-id').dataset.cpb = cpb;
   openModal('truck-return-modal');
 }
@@ -7589,7 +7589,7 @@ async function loadApprovals(filter) {
     const lines = r.lines || [{ product_name: r.product_name, boxes: r.boxes, bags: r.bags }];
     const productsHtml = lines.map(l =>
       `<div style="font-size:.78rem;padding:3px 0;border-bottom:1px solid rgba(0,0,0,.06);">
-        📦 ${l.product_name} — <strong>${l.boxes} box${l.boxes!==1?'es':''} (${l.bags} bags)</strong>
+        📦 ${l.product_name} — <strong>${l.boxes} box${l.boxes!==1?'es':''} (${l.bags} pcs)</strong>
       </div>`
     ).join('');
     const totalBoxes = lines.reduce((a,l)=>a+l.boxes,0);
