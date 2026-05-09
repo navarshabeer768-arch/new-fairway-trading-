@@ -990,9 +990,12 @@ input[type=number]{-moz-appearance:textfield;}
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label">Pieces per Box <span style="font-size:.75rem;color:var(--text2);font-weight:400;">— how many pieces in 1 box for stock counting (e.g. 4 means 1 box = 4 pieces)</span></label>
+        <label class="form-label">Pieces per Box <span style="font-size:.75rem;color:var(--text2);font-weight:400;">— for POS cart & truck display only (e.g. 48 for chips)</span></label>
+        <input type="number" class="form-input" id="prod-pieces-per-box" placeholder="e.g. 48" min="1" value="4">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Cases per Box <span style="font-size:.75rem;color:var(--text2);font-weight:400;">— for warehouse stock counting — ⚠️ do not change</span></label>
         <input type="number" class="form-input" id="prod-bags-per-box" placeholder="e.g. 4" min="1" value="4">
-        <div style="font-size:.72rem;color:#e65100;margin-top:4px;">⚠️ Changing this affects all stock calculations. Only change if wrong from the start.</div>
       </div>
       <div class="form-group">
         <label class="form-label">Product Photo</label>
@@ -1797,12 +1800,26 @@ function casesToBoxes(bags, cpb) {
 function boxesBagsToTotal(boxes, bags, cpb) {
   return (parseInt(boxes) || 0) * cpb + (parseInt(bags) || 0);
 }
-function fmtStock(totalBags, cpb) {
+function fmtStock(totalUnits, cpb) {
+  // Used for WAREHOUSE display - always uses cases_per_box
   cpb = parseInt(cpb) || 4;
-  if (totalBags === 0) return cpb > 1 ? '0 boxes' : '0';
-  if (cpb <= 1) return totalBags + ' pcs';
-  const boxes = Math.floor(totalBags / cpb);
-  const rem = totalBags % cpb;
+  if (totalUnits === 0) return '0 boxes';
+  const boxes = Math.floor(totalUnits / cpb);
+  const rem = Math.round(totalUnits % cpb);
+  if (boxes === 0) return `${rem} pc${rem !== 1 ? 's' : ''}`;
+  if (rem === 0) return `${boxes} box${boxes !== 1 ? 'es' : ''}`;
+  return `${boxes} box${boxes !== 1 ? 'es' : ''} + ${rem} pc${rem !== 1 ? 's' : ''}`;
+}
+
+function fmtStockTruck(totalUnits, product) {
+  // Used for TRUCK & POS display - uses pieces_per_box
+  const ppb = parseInt(product?.pieces_per_box) || parseInt(product?.cases_per_box) || 4;
+  const cpb = parseInt(product?.cases_per_box) || 4;
+  if (totalUnits === 0) return '0 boxes';
+  // Convert from cases units to pieces units for display
+  const totalPieces = totalUnits * (ppb / cpb);
+  const boxes = Math.floor(totalPieces / ppb);
+  const rem = Math.round(totalPieces % ppb);
   if (boxes === 0) return `${rem} pc${rem !== 1 ? 's' : ''}`;
   if (rem === 0) return `${boxes} box${boxes !== 1 ? 'es' : ''}`;
   return `${boxes} box${boxes !== 1 ? 'es' : ''} + ${rem} pc${rem !== 1 ? 's' : ''}`;
@@ -2176,8 +2193,10 @@ function renderPOSProducts(products) {
   grid.innerHTML = products.map(p => {
     const stock = p.truckQty || 0;
     const cpb = getCasesPerBox(p);
-    const stockFmt = fmtStock(stock, cpb);
+    const ppb = parseInt(p.pieces_per_box) || cpb; // pieces per box for display
+    const stockFmt = fmtStockTruck(stock, p);
     const whFmt = fmtStock(p.warehouseQty || 0, cpb);
+    const pcPrice = parseFloat((p.selling_price / ppb).toFixed(3));
     const cls = stock <= 0 ? 'out-stock' : stock <= (p.low_stock_threshold || 10) ? 'low-stock' : '';
     const badge = stock <= 0 ? '<span class="product-badge" style="background:var(--red);color:#fff">OUT</span>' :
                   stock <= (p.low_stock_threshold || 10) ? '<span class="product-badge">LOW</span>' : '';
@@ -2190,7 +2209,7 @@ function renderPOSProducts(products) {
       <div class="product-card-body">
         <div class="product-name">${p.name}</div>
         <div class="product-price">${fmtMoney(p.selling_price)}/box</div>
-        ${cpb>1?`<div style="font-size:.65rem;color:var(--text2);text-align:center;">${fmtMoney(parseFloat((p.selling_price/cpb).toFixed(3)))}/piece</div>`:''}
+        ${ppb>1?`<div style="font-size:.65rem;color:var(--text2);text-align:center;">${fmtMoney(pcPrice)}/piece</div>`:''}
         <div class="product-stock" style="display:flex;justify-content:center;gap:8px;font-size:.62rem;">
           <span>🚛 ${stockFmt}</span>
           <span style="color:var(--green);">🏭 ${whFmt}</span>
@@ -2251,10 +2270,9 @@ async function addToCart(productId) {
   if (!p) return;
   const truckBags = p.truckQty || 0;
   if (truckBags <= 0) { showToast('⚠️ Out of stock!'); return; }
-  const bpb = getCasesPerBox(p);
-  const ppb = parseInt(p.pieces_per_bag) || 1; // pieces per bag
-  const bagPrice = parseFloat((p.selling_price / bpb).toFixed(3));
-  const piecePrice = parseFloat((bagPrice / ppb).toFixed(3));
+  const bpb = getCasesPerBox(p); // cases per box for stock math
+  const ppb = parseInt(p.pieces_per_box) || bpb; // pieces per box for price display
+  const bagPrice = parseFloat((p.selling_price / ppb).toFixed(3)); // price per piece
   const existing = cart.find(c => c.product_id === productId && !c.isFOC);
   if (existing) {
     const step = existing.uom === 'bag' ? 1 : bpb;
@@ -2731,8 +2749,8 @@ async function loadInventory() {
       const cpb=getCasesPerBox(p);
       const truckCases=invMap[p.product_id]?.quantity||0;
       const whCases=calcWH(p.product_id);
-      const truckFmt=fmtStock(truckCases,cpb);
-      const whFmt=fmtStock(whCases,cpb);
+      const truckFmt=fmtStockTruck(truckCases,p); // truck uses pieces_per_box
+      const whFmt=fmtStock(whCases,cpb); // warehouse uses cases_per_box
       const cls=truckCases<=0?'out':truckCases<=(p.low_stock_threshold||10)?'low':'';
       const imgHtml=p.photo?`<img class="inv-photo" src="${p.photo}" alt="${p.name}">`:`<div class="inv-photo-placeholder">${p.icon||'📦'}</div>`;
       return `<div class="inv-card">
@@ -4162,7 +4180,8 @@ function openProductModal(prod) {
   document.getElementById('prod-stock').value = prod ? prod.stock_quantity || 0 : 0;
   document.getElementById('prod-low').value = prod ? prod.low_stock_threshold || 10 : 10;
   document.getElementById('prod-unit').value = prod ? prod.unit : 'Box';
-  document.getElementById('prod-bags-per-box').value = prod ? (prod.cases_per_box || prod.bags_per_box || 4) : 4;
+  document.getElementById('prod-bags-per-box').value = prod ? (prod.cases_per_box || 4) : 4;
+  document.getElementById('prod-pieces-per-box').value = prod ? (prod.pieces_per_box || prod.cases_per_box || 4) : 4;
   document.getElementById('prod-icon').value = prod ? prod.icon || '' : '';
   document.getElementById('prod-barcode').value = prod ? prod.barcode || '' : '';
   document.getElementById('prod-photo-data').value = prod ? prod.photo || '' : '';
@@ -4223,6 +4242,7 @@ async function saveProduct() {
     stock_quantity: parseInt(document.getElementById('prod-stock').value) || 0,
     unit: document.getElementById('prod-unit').value,
     cases_per_box: parseInt(document.getElementById('prod-bags-per-box').value) || 4,
+    pieces_per_box: parseInt(document.getElementById('prod-pieces-per-box').value) || 4,
     low_stock_threshold: parseInt(document.getElementById('prod-low').value) || 10,
   };
   const icon = document.getElementById('prod-icon').value || '📦';
@@ -6500,8 +6520,8 @@ async function loadTruckScreen() {
     const cpb = getCasesPerBox(p);
     const truckQty = truckStock[p.product_id] || 0;
     const whQty = calcWH(p.product_id);
-    const truckFmt = fmtStock(truckQty, cpb);
-    const whFmt = fmtStock(whQty, cpb);
+    const truckFmt = fmtStockTruck(truckQty, p); // truck: uses pieces_per_box
+    const whFmt = fmtStock(whQty, cpb); // warehouse: uses cases_per_box
     const imgHtml = p.photo ? `<img class="inv-photo" src="${p.photo}" alt="${p.name}">` : `<div class="inv-photo-placeholder">${p.icon||'📦'}</div>`;
     const truckColor = truckQty <= 0 ? 'color-red' : truckQty <= (p.low_stock_threshold||10) ? 'color-gold' : 'color-navy';
 
