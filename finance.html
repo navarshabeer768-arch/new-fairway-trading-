@@ -3747,8 +3747,9 @@ function renderStockReport(asOf) {
     // Warehouse = Purchased - Sold - Truck
     // Closing = Warehouse + Truck = Purchased - Sold
     const openingBags = 0; // new business starts at 0
-    const warehouseBags = Math.max(0, purchased - sold - truckBags);
-    const currentTotalBags = warehouseBags + truckBags; // = Purchased - Sold
+    // ── USE ACTUAL warehouse_stock TABLE (same source as POS) ──
+    const warehouseBags = whMap[pid] || 0;
+    const currentTotalBags = warehouseBags + truckBags;
     const openingBoxes = Math.floor(openingBags/cpb);
     const soldBoxes = Math.floor(sold/cpb);
     const soldBagsRem = sold % cpb;
