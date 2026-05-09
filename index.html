@@ -2337,10 +2337,12 @@ function addBoxes(idx, delta) {
   item.totalBags = newTotalBags;
   item.quantity = newTotalBags;
   item.uom = bagRem > 0 ? 'mixed' : 'box';
-  const boxes = Math.floor(newTotalBags / bpb);
-  const rem = newTotalBags % bpb;
-  const bagP = item.bagPrice || item.basePrice / bpb;
-  item.total = item.isFOC ? 0 : (boxes * item.basePrice) + (rem * bagP);
+  const ppbBox = item.piecesPerBox || bpb;
+  const totalPcsBox = Math.round(newTotalBags * (ppbBox/bpb));
+  const boxesDisp = Math.floor(totalPcsBox / ppbBox);
+  const remPcsBox = totalPcsBox % ppbBox;
+  const pcPriceBox = item.bagPrice || item.basePrice / ppbBox;
+  item.total = item.isFOC ? 0 : (boxesDisp * item.basePrice) + (remPcsBox * pcPriceBox);
   renderCart();
 }
 
@@ -2350,18 +2352,21 @@ function togglePieceMode(idx) { /* removed */ }
 function addBags(idx, delta) {
   const item = cart[idx];
   const bpb = item.bagsPerBox || 4;
-  const newTotalBags = item.totalBags + delta;
-  if (newTotalBags <= 0) { removeFromCart(idx); return; }
-  const ppbB = item.piecesPerBox || bpb;
-  const newPiecesB = Math.round(newTotalBags * (ppbB/bpb));
-  if (newPiecesB > item.maxQty) { showToast(`⚠️ Only ${fmtTruckPieces(item.maxQty, ppbB)} in truck!`); return; }
-  item.totalBags = newTotalBags;
-  item.quantity = newTotalBags;
-  item.uom = 'mixed';
-  const boxes = Math.floor(newTotalBags / bpb);
-  const rem = newTotalBags % bpb;
-  const bagP = item.bagPrice || item.basePrice / bpb;
-  item.total = item.isFOC ? 0 : (boxes * item.basePrice) + (rem * bagP);
+  const ppb = item.piecesPerBox || bpb;
+  // delta is in PIECES — add/remove 1 piece at a time
+  const currentPieces = Math.round(item.totalBags * (ppb / bpb));
+  const newPieces = currentPieces + delta;
+  if (newPieces <= 0) { removeFromCart(idx); return; }
+  if (newPieces > item.maxQty) { showToast(`⚠️ Only ${fmtTruckPieces(item.maxQty, ppb)} in truck!`); return; }
+  // Convert back to bags for stock math
+  item.totalBags = newPieces * (bpb / ppb);
+  item.quantity = item.totalBags;
+  item.uom = newPieces % ppb === 0 ? 'box' : 'mixed';
+  // Price = pieces × price per piece
+  const pcPrice = item.bagPrice || item.basePrice / ppb;
+  const boxes = Math.floor(newPieces / ppb);
+  const remPcs = newPieces % ppb;
+  item.total = item.isFOC ? 0 : (boxes * item.basePrice) + (remPcs * pcPrice);
   renderCart();
 }
 
@@ -2600,21 +2605,20 @@ async function completeOrder() {
     // Save items & update inventory
     for (const item of cart) {
       const bpb = item.bagsPerBox || getCasesPerBox(prodMap?.[item.product_id]) || 4;
-      const ppb = item.piecesPerBox || bpb; // pieces per box
+      const ppb = item.piecesPerBox || bpb;
       const bagsToDeduct = item.totalBags || item.quantity || 1;
-      // Convert bags to pieces for truck stock (truck stores in pieces)
       const piecesToDeduct = Math.round(bagsToDeduct * (ppb / bpb));
       const itemData = {
         invoice_id: invId,
         product_id: item.product_id,
         name: item.name || '',
-        quantity: bagsToDeduct, // keep as bags for finance calculations
+        quantity: piecesToDeduct, // store as PIECES for correct invoice display
         price: item.basePrice || item.price || 0,
         cost: item.cost ? (item.cost / bpb) : 0,
         total: item.total || 0
       };
-      try { itemData.display_unit = item.displayUnit || item.unit || 'Box'; } catch(e){}
-      try { itemData.uom = item.uom || 'box'; } catch(e){}
+      try { itemData.display_unit = 'Piece'; } catch(e){}
+      try { itemData.uom = 'piece'; } catch(e){}
       try { itemData.is_foc = item.isFOC ? 1 : 0; } catch(e){}
       try { itemData.pieces_per_box = ppb; } catch(e){}
       await dbAdd('invoice_items', itemData);
@@ -2658,18 +2662,23 @@ async function completeOrder() {
       cheque_number: chequeNum,
       cheque_date: chequeDate
     };
-    const itemsForPrint = cart.map(item => ({
-      product_id: item.product_id,
-      name: item.name || '',
-      quantity: item.totalBags || item.quantity || 1,
-      price: item.basePrice || item.price || 0,
-      total: item.total || 0,
-      display_unit: item.displayUnit || item.unit || 'Box',
-      uom: item.uom || 'box',
-      bags_per_box: item.bagsPerBox || 4,
-      pieces_per_box: item.piecesPerBox || item.bagsPerBox || 4,
-      is_foc: item.isFOC ? 1 : 0
-    }));
+    const itemsForPrint = cart.map(item => {
+      const bpb2 = item.bagsPerBox || 4;
+      const ppb2 = item.piecesPerBox || bpb2;
+      const pcs = Math.round((item.totalBags||1) * (ppb2/bpb2));
+      return {
+        product_id: item.product_id,
+        name: item.name || '',
+        quantity: pcs, // in pieces
+        price: item.basePrice || item.price || 0,
+        total: item.total || 0,
+        display_unit: 'Piece',
+        uom: 'piece',
+        bags_per_box: bpb2,
+        pieces_per_box: ppb2,
+        is_foc: item.isFOC ? 1 : 0
+      };
+    });
     const customer = custId ? await dbGet('customers', custId) : null;
     const products = await dbGetAll('products');
     const prodMap = {};
@@ -5840,19 +5849,17 @@ function _buildA4PDF(invoice, items, customer, prodMap) {
   const tableBody = items.map((it, i) => {
     const pid = parseInt(it.product_id)||it.product_id;
     const p = prodMap[pid]||prodMap[String(it.product_id)]||{};
-    const bpb = (p&&p.cases_per_box)||it.bags_per_box||4;
-    const ppb = (p&&p.pieces_per_box)||it.pieces_per_box||bpb; // pieces per box for display
+    const ppb = parseInt(it.pieces_per_box) || (p&&p.pieces_per_box) || (p&&p.cases_per_box) || 4;
     const nm = (p&&p.name)||it.name||'';
     const bc = (p&&p.barcode)||'';
-    const totalQty = parseFloat(it.quantity||0); // stored as cases units
-    // Convert to pieces for display
-    const totalPieces = Math.round(totalQty * (ppb/bpb));
+    // quantity is now stored as pieces
+    const totalPieces = Math.round(parseFloat(it.quantity||0));
     const boxes = Math.floor(totalPieces / ppb);
     const remPcs = totalPieces % ppb;
     const unit = boxes > 0 && remPcs > 0 ? 'Box+Pc' : boxes > 0 ? 'Box' : 'Piece';
     const qtyVal = boxes > 0 && remPcs > 0
       ? boxes + '+' + remPcs
-      : boxes > 0 ? String(boxes) : String(remPcs || totalPieces);
+      : boxes > 0 ? String(boxes) : String(totalPieces);
     const boxPrice = parseFloat(it.price||0);
     const pcPrice = ppb > 0 ? boxPrice / ppb : boxPrice;
     const displayPrice = boxes === 0 ? pcPrice.toFixed(3) : boxPrice.toFixed(2);
