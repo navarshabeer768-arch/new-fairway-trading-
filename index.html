@@ -994,6 +994,10 @@ input[type=number]{-moz-appearance:textfield;}
         <input type="number" class="form-input" id="prod-bags-per-box" placeholder="e.g. 4" min="1" value="4">
       </div>
       <div class="form-group">
+        <label class="form-label">Pieces per Bag <span style="font-size:.75rem;color:var(--text2);font-weight:400;">— for selling individual pieces (leave 1 if not needed)</span></label>
+        <input type="number" class="form-input" id="prod-pieces-per-bag" placeholder="e.g. 1" min="1" value="1">
+      </div>
+      <div class="form-group">
         <label class="form-label">Product Photo</label>
         <div id="photo-preview-wrap" class="photo-preview-wrap" style="display:none;">
           <img id="prod-photo-preview" class="photo-preview" src="" alt="Product">
@@ -2183,7 +2187,7 @@ function renderPOSProducts(products) {
       <div class="product-card-body">
         <div class="product-name">${p.name}</div>
         <div class="product-price">${fmtMoney(p.selling_price)}/box</div>
-        ${cpb>1?`<div style="font-size:.65rem;color:var(--text2);text-align:center;">${fmtMoney(parseFloat((p.selling_price/cpb).toFixed(3)))}/bag</div>`:''}
+        ${cpb>1?`<div style="font-size:.65rem;color:var(--text2);text-align:center;">${fmtMoney(parseFloat((p.selling_price/cpb).toFixed(3)))}/bag${(parseInt(p.pieces_per_bag)||1)>1?' · '+fmtMoney(parseFloat((p.selling_price/cpb/(parseInt(p.pieces_per_bag)||1)).toFixed(3)))+'/pc':''}</div>`:''}
         <div class="product-stock" style="display:flex;justify-content:center;gap:8px;font-size:.62rem;">
           <span>🚛 ${stockFmt}</span>
           <span style="color:var(--green);">🏭 ${whFmt}</span>
@@ -2245,6 +2249,9 @@ async function addToCart(productId) {
   const truckBags = p.truckQty || 0;
   if (truckBags <= 0) { showToast('⚠️ Out of stock!'); return; }
   const bpb = getCasesPerBox(p);
+  const ppb = parseInt(p.pieces_per_bag) || 1; // pieces per bag
+  const bagPrice = parseFloat((p.selling_price / bpb).toFixed(3));
+  const piecePrice = parseFloat((bagPrice / ppb).toFixed(3));
   const existing = cart.find(c => c.product_id === productId && !c.isFOC);
   if (existing) {
     const step = existing.uom === 'bag' ? 1 : bpb;
@@ -2252,22 +2259,23 @@ async function addToCart(productId) {
     if (newBags > truckBags) { showToast('⚠️ Not enough stock!'); return; }
     existing.totalBags = newBags;
     existing.quantity = newBags;
-    // Total = boxes × boxPrice + extraBags × bagPrice
     const boxes = Math.floor(newBags / bpb);
     const rem = newBags % bpb;
     existing.total = existing.isFOC ? 0 : (boxes * existing.basePrice) + (rem * existing.bagPrice);
   } else {
-    const bagPrice = parseFloat((p.selling_price / bpb).toFixed(3));
     cart.push({
       product_id: productId,
       name: p.name,
-      price: p.selling_price,     // box price
-      bagPrice,                    // bag price
+      price: p.selling_price,
+      bagPrice,
+      piecePrice,
       basePrice: p.selling_price,
       cost: p.cost_price,
-      quantity: bpb,               // stored as bags
-      totalBags: bpb,             // 1 box = bpb bags
-      total: p.selling_price,     // 1 box price
+      quantity: bpb,
+      totalBags: bpb,
+      pieces: 0,
+      piecesPerBag: ppb,
+      total: p.selling_price,
       icon: p.icon || '📦',
       unit: p.unit || 'Box',
       displayUnit: p.unit || 'Box',
@@ -2309,6 +2317,48 @@ function addBoxes(idx, delta) {
   renderCart();
 }
 
+function togglePieceMode(idx) {
+  const item = cart[idx];
+  const bpb = item.bagsPerBox || 4;
+  const ppb = item.piecesPerBag || 1;
+  if (item.uom === 'piece') {
+    // Switch back to box mode — reset to 1 box
+    item.uom = 'box';
+    item.pieces = 0;
+    item.totalBags = bpb;
+    item.quantity = bpb;
+    item.total = item.isFOC ? 0 : item.basePrice;
+  } else {
+    // Switch to piece mode — start with 1 piece
+    item.uom = 'piece';
+    item.pieces = 1;
+    item.totalBags = 1 / ppb;
+    item.quantity = item.totalBags;
+    item.piecePrice = item.piecePrice || parseFloat((item.basePrice / bpb / ppb).toFixed(3));
+    item.total = item.isFOC ? 0 : item.piecePrice;
+  }
+  renderCart();
+}
+
+function addPieces(idx, delta) {
+  const item = cart[idx];
+  const bpb = item.bagsPerBox || 4;
+  const ppb = item.piecesPerBag || 1;
+  const newPieces = (item.pieces || 0) + delta;
+  if (newPieces < 0) return;
+  // Convert pieces to bags (fractional)
+  const bagsFromPieces = newPieces / ppb;
+  if (bagsFromPieces > item.maxQty) { showToast(`⚠️ Only ${fmtStock(item.maxQty, bpb)} in truck!`); return; }
+  item.pieces = newPieces;
+  // Store as fractional bags for stock deduction (1 piece = 1/ppb bags)
+  item.totalBags = item.pieces / ppb;
+  item.quantity = item.totalBags;
+  item.uom = 'piece';
+  item.total = item.isFOC ? 0 : item.pieces * (item.piecePrice || item.bagPrice / ppb || item.basePrice / bpb / ppb);
+  if (newPieces === 0) { removeFromCart(idx); return; }
+  renderCart();
+}
+
 function addBags(idx, delta) {
   const item = cart[idx];
   const bpb = item.bagsPerBox || 4;
@@ -2346,7 +2396,10 @@ function renderCart() {
     const priceDisplay = item.isFOC
       ? '<span style="color:var(--green);font-weight:700;">FREE (FOC)</span>'
       : `<span style="color:var(--navy);font-weight:700;">${fmtMoney(item.basePrice)}/box</span>`
-        + (bpb>1 ? ` <span style="color:var(--text2);font-size:.7rem;">· ${fmtMoney(item.bagPrice)}/bag</span>` : '');
+        + (bpb>1 ? ` <span style="color:var(--text2);font-size:.7rem;">· ${fmtMoney(item.bagPrice)}/bag</span>` : '')
+        + ((item.piecesPerBag||1)>1 ? ` <span style="color:var(--text2);font-size:.7rem;">· ${fmtMoney(item.piecePrice)}/pc</span>` : '');
+    const ppb = item.piecesPerBag || 1;
+    const piecesCount = item.uom === 'piece' ? (item.pieces || 0) : 0;
     return `<div class="cart-item" style="flex-direction:column;gap:4px;padding:10px;">
       <div style="display:flex;align-items:center;gap:8px;width:100%;">
         <span style="font-size:1.2rem">${item.icon}</span>
@@ -2357,19 +2410,27 @@ function renderCart() {
         </div>
         <button class="cart-item-del" onclick="removeFromCart(${i})">🗑</button>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;width:100%;">
-        <!-- Box qty controls (always shown) -->
-        <div style="display:flex;align-items:center;gap:0;background:var(--surface2);border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+      <div style="display:flex;align-items:center;gap:6px;width:100%;flex-wrap:wrap;">
+        <!-- Box qty controls -->
+        ${item.uom !== 'piece' ? `<div style="display:flex;align-items:center;gap:0;background:var(--surface2);border-radius:8px;overflow:hidden;border:1px solid var(--border);">
           <button onclick="addBoxes(${i},-1)" style="width:36px;height:36px;border:none;background:none;font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--navy);">−</button>
           <span style="min-width:52px;text-align:center;font-weight:800;font-size:.9rem;padding:0 4px;">${boxes} box${boxes!==1?'es':''}</span>
           <button onclick="addBoxes(${i},1)" style="width:36px;height:36px;border:none;background:none;font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--navy);">+</button>
-        </div>
-        <!-- Bag extra (shown only when bpb > 1) -->
-        ${bpb>1?`<div style="display:flex;align-items:center;gap:0;background:var(--surface2);border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+        </div>` : ''}
+        <!-- Bag extra (shown when bpb > 1 and not piece mode) -->
+        ${bpb>1 && item.uom !== 'piece' ?`<div style="display:flex;align-items:center;gap:0;background:var(--surface2);border-radius:8px;overflow:hidden;border:1px solid var(--border);">
           <button onclick="addBags(${i},-1)" style="width:28px;height:36px;border:none;background:none;font-size:1rem;font-weight:700;cursor:pointer;color:var(--text2);">−</button>
           <span style="min-width:42px;text-align:center;font-weight:700;font-size:.8rem;color:var(--text2);">${rem} bag${rem!==1?'s':''}</span>
           <button onclick="addBags(${i},1)" style="width:28px;height:36px;border:none;background:none;font-size:1rem;font-weight:700;cursor:pointer;color:var(--text2);">+</button>
         </div>`:''}
+        <!-- Piece controls (only in piece mode) -->
+        ${item.uom === 'piece' ? `<div style="display:flex;align-items:center;gap:0;background:#e8f5e9;border-radius:8px;overflow:hidden;border:1.5px solid var(--green);">
+          <button onclick="addPieces(${i},-1)" style="width:32px;height:36px;border:none;background:none;font-size:1rem;font-weight:700;cursor:pointer;color:var(--green);">−</button>
+          <span style="min-width:52px;text-align:center;font-weight:800;font-size:.9rem;color:var(--green);">${piecesCount} pc${piecesCount!==1?'s':''}</span>
+          <button onclick="addPieces(${i},1)" style="width:32px;height:36px;border:none;background:none;font-size:1rem;font-weight:700;cursor:pointer;color:var(--green);">+</button>
+        </div>` : ''}
+        <!-- Piece mode toggle (show only if ppb > 1) -->
+        ${ppb > 1 ? '<button onclick="togglePieceMode('+i+')" style="padding:4px 10px;border-radius:8px;border:1.5px solid '+(item.uom==='piece'?'var(--green)':'var(--border)')+';background:'+(item.uom==='piece'?'var(--green)':'#fff')+';color:'+(item.uom==='piece'?'#fff':'var(--text2)')+';font-size:.72rem;font-weight:700;cursor:pointer;white-space:nowrap;">🔢 Piece</button>' : ''}
         <!-- FOC toggle -->
         <label style="display:flex;align-items:center;gap:3px;font-size:.75rem;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:auto;">
           <input type="checkbox" ${item.isFOC?'checked':''} onchange="toggleFOC(${i},this.checked)" style="width:15px;height:15px;">
@@ -2556,7 +2617,6 @@ async function completeOrder() {
     // Save items & update inventory
     for (const item of cart) {
       const bagsToDeduct = item.totalBags || item.quantity || 1;
-      // Only save columns that definitely exist in Supabase invoice_items table
       const itemData = {
         invoice_id: invId,
         product_id: item.product_id,
@@ -2566,10 +2626,10 @@ async function completeOrder() {
         cost: item.cost ? (item.cost / (item.bagsPerBox || getCasesPerBox(prodMap?.[item.product_id]) || 1)) : 0,
         total: item.total || 0
       };
-      // Try optional columns - won't break if they don't exist
-      try { itemData.display_unit = item.displayUnit || item.unit || 'Box'; } catch(e){}
+      try { itemData.display_unit = item.uom === 'piece' ? 'Piece' : (item.displayUnit || item.unit || 'Box'); } catch(e){}
       try { itemData.uom = item.uom || 'box'; } catch(e){}
       try { itemData.is_foc = item.isFOC ? 1 : 0; } catch(e){}
+      try { if (item.uom === 'piece') { itemData.pieces = item.pieces || 1; itemData.piece_price = item.piecePrice || 0; } } catch(e){}
       await dbAdd('invoice_items', itemData);
       // Deduct from THIS employee's truck stock (settings-based)
       const _saleOwner = getCurrentTruckOwner();
@@ -3445,17 +3505,25 @@ async function editInvoice() {
   let itemsHtml = items.map((it, i) => {
     const p = prodMap[it.product_id];
     const cpb = p ? getCasesPerBox(p) : 4;
-    const pricePerBox = parseFloat(it.price || 0); // stored as price per BOX
+    const pricePerBox = parseFloat(it.price || 0);
     const pricePerBag = pricePerBox / cpb;
-    const bags = parseInt(it.quantity || 0);
+    const ispiece = it.uom === 'piece' || (it.pieces && it.pieces > 0);
+    const bags = parseFloat(it.quantity || 0);
+    const pieces = parseInt(it.pieces || 0);
+    const piecePrice = parseFloat(it.piece_price || 0);
     const boxes = Math.floor(bags / cpb);
-    const remBags = bags % cpb;
-    const qtyDisplay = boxes > 0 ? (boxes + ' box' + (boxes!==1?'es':'') + (remBags>0?' + '+remBags+' bag'+(remBags!==1?'s':''):'')) : (bags + ' bag' + (bags!==1?'s':''));
+    const remBags = Math.round(bags % cpb);
+    const qtyDisplay = ispiece && pieces > 0
+      ? (pieces + ' piece' + (pieces!==1?'s':''))
+      : boxes > 0 ? (boxes + ' box' + (boxes!==1?'es':'') + (remBags>0?' + '+remBags+' bag'+(remBags!==1?'s':''):'')) : (bags + ' bag' + (bags!==1?'s':''));
+    const priceDisplay = ispiece && piecePrice > 0
+      ? `QR ${piecePrice.toFixed(3)}/piece`
+      : `QR ${pricePerBox.toFixed(2)}/box (QR ${pricePerBag.toFixed(3)}/bag)`;
     const itemTotal = parseFloat(it.total || (bags * pricePerBag));
     return `<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--surface2);border-radius:8px;margin-bottom:6px;">
       <div style="flex:1;">
         <div style="font-size:.85rem;font-weight:600;" class="edit-product-name">${p?.name||'?'}</div>
-        <div style="font-size:.72rem;color:var(--text2);">${qtyDisplay} · QR ${pricePerBox.toFixed(2)}/box (QR ${pricePerBag.toFixed(3)}/bag)</div>
+        <div style="font-size:.72rem;color:var(--text2);">${qtyDisplay} · ${priceDisplay}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
         <span style="font-size:.65rem;color:var(--text2);">boxes</span>
@@ -4142,6 +4210,7 @@ function openProductModal(prod) {
   document.getElementById('prod-low').value = prod ? prod.low_stock_threshold || 10 : 10;
   document.getElementById('prod-unit').value = prod ? prod.unit : 'Box';
   document.getElementById('prod-bags-per-box').value = prod ? (prod.cases_per_box || prod.bags_per_box || 4) : 4;
+  document.getElementById('prod-pieces-per-bag').value = prod ? (prod.pieces_per_bag || 1) : 1;
   document.getElementById('prod-icon').value = prod ? prod.icon || '' : '';
   document.getElementById('prod-barcode').value = prod ? prod.barcode || '' : '';
   document.getElementById('prod-photo-data').value = prod ? prod.photo || '' : '';
@@ -4202,6 +4271,7 @@ async function saveProduct() {
     stock_quantity: stockQty,
     unit: document.getElementById('prod-unit').value,
     cases_per_box: parseInt(document.getElementById('prod-bags-per-box').value) || 4,
+    pieces_per_bag: parseInt(document.getElementById('prod-pieces-per-bag').value) || 1,
     low_stock_threshold: parseInt(document.getElementById('prod-low').value) || 10,
     icon: document.getElementById('prod-icon').value || '📦',
     barcode: document.getElementById('prod-barcode').value.trim() || null,
@@ -5767,11 +5837,13 @@ function _buildA4PDF(invoice, items, customer, prodMap) {
     const bpb = (p&&p.cases_per_box)||it.bags_per_box||4;
     const nm = (p&&p.name)||it.name||'';
     const bc = (p&&p.barcode)||'';
-    const totalBags = it.quantity||0;
+    const totalBags = parseFloat(it.quantity||0);
+    const isPiece = it.uom === 'piece' || (it.pieces && parseInt(it.pieces) > 0);
+    const pieceCnt = parseInt(it.pieces || 0);
     const boxes = Math.floor(totalBags / bpb);
-    const remBags = totalBags % bpb;
-    const unit = boxes > 0 && remBags > 0 ? 'Box + Bag' : boxes > 0 ? 'Box' : 'Bag';
-    const qtyVal = remBags > 0 ? (boxes > 0 ? boxes + ' + ' + remBags : remBags + '') : (boxes + '');
+    const remBags = Math.round(totalBags % bpb);
+    const unit = isPiece ? 'Piece' : boxes > 0 && remBags > 0 ? 'Box + Bag' : boxes > 0 ? 'Box' : 'Bag';
+    const qtyVal = isPiece ? (pieceCnt + '') : remBags > 0 ? (boxes > 0 ? boxes + ' + ' + remBags : remBags + '') : (boxes + '');
     const price = it.is_foc?'':parseFloat(it.price||0).toFixed(2);
     const amt   = it.is_foc?'':parseFloat(it.total||0).toFixed(2);
     const foc   = it.is_foc?qtyVal:'';
