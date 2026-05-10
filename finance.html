@@ -3756,8 +3756,8 @@ function renderStockReport(asOf) {
     const truckBags = truckPieces / ppb * cpb; // pieces ÷ ppb = boxes, × cpb = bags
 
     const openingBags = 0;
-    // ── READ warehouse_stock TABLE (same as POS — source of truth) ──
-    const warehouseBags = whMap[pid] || 0;
+    // ── CALCULATE: Purchased − Sold − Truck = Warehouse ──
+    const warehouseBags = Math.max(0, purchased - sold - truckBags);
     const currentTotalBags = warehouseBags + truckBags;
     const openingBoxes = Math.floor(openingBags/cpb);
     const soldBoxes = Math.floor(sold/cpb);
