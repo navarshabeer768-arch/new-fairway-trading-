@@ -6526,7 +6526,9 @@ async function loadTruckScreen() {
   let truckTotalBoxes = 0, whTotalBoxes = 0;
   products.forEach(p => {
     const cpb = getCasesPerBox(p) || 1;
-    truckTotalBoxes += Math.floor((truckStock[p.product_id] || 0) / cpb);
+    // Truck stock is in PIECES — divide by pieces_per_box for correct box count
+    const ppb = parseInt(p.pieces_per_box) || cpb;
+    truckTotalBoxes += Math.floor((truckStock[p.product_id] || 0) / ppb);
     whTotalBoxes += Math.floor(calcWH(p.product_id) / cpb);
   });
   document.getElementById('tl-truck-total').textContent = truckTotalBoxes + ' boxes';
@@ -6558,7 +6560,7 @@ async function loadTruckScreen() {
             </div>
           </div>
           <div style="display:flex;flex-direction:column;gap:6px;">
-            <button class="btn btn-primary btn-sm" onclick="openTruckLoadModal(${p.product_id},'${p.name}',${truckQty},${whQty},${cpb},${parseInt(p.pieces_per_box)||cpb})">🚛 Load</button>
+            <button class="btn btn-primary btn-sm" onclick="openTruckLoadModal(${p.product_id},'${p.name}',${truckQty},${whQty},${cpb})">🚛 Load</button>
             <button class="btn btn-outline btn-sm" onclick="openTruckReturnModal(${p.product_id},'${p.name}',${truckQty},${cpb})">↩️ Return</button>
           </div>
         </div>
@@ -6607,15 +6609,11 @@ async function loadTruckScreen() {
   }
 }
 
-function openTruckLoadModal(productId, name, truckQty, whQty, cpb, ppb) {
+function openTruckLoadModal(productId, name, truckQty, whQty, cpb) {
   cpb = cpb || 1;
-  ppb = ppb || cpb;
   document.getElementById('tl-product-id').value = productId;
   document.getElementById('tl-qty').value = '';
-  // truckQty is in PIECES — use fmtTruckPieces; whQty is in bags — use fmtStock
-  const truckDisplay = fmtTruckPieces(truckQty, ppb);
-  const whDisplay = fmtStock(whQty, cpb);
-  document.getElementById('tl-stock-info').innerHTML = `<strong>${name}</strong><br>🚛 Truck: <strong>${truckDisplay}</strong> &nbsp;|&nbsp; 🏭 WH: <strong>${whDisplay}</strong><br><small style="color:var(--text2);">Enter number of boxes to load (1 box = ${ppb} pcs)</small>`;
+  document.getElementById('tl-stock-info').innerHTML = `<strong>${name}</strong><br>🚛 Truck: <strong>${fmtStock(truckQty,cpb)}</strong> &nbsp;|&nbsp; 🏭 WH: <strong>${fmtStock(whQty,cpb)}</strong><br><small style="color:var(--text2);">Enter number of boxes to load (1 box = ${cpb} pcs)</small>`;
   document.getElementById('tl-product-id').dataset.cpb = cpb;
   // Update button text based on role
   const btn = document.getElementById('tl-confirm-btn');
@@ -6631,10 +6629,31 @@ async function confirmTruckLoad() {
   const bags = boxes * cpb;
   const owner = getCurrentTruckOwner();
 
-  // Read warehouse directly from warehouse_stock table (source of truth, same as truck screen display)
-  delete localCache['warehouse_stock'];
-  const { data: whData2 } = await sb.from('warehouse_stock').select('quantity').eq('product_id', productId).maybeSingle();
-  const whQty = Math.max(0, parseFloat(whData2?.quantity || 0));
+  // Calculate warehouse qty using the same formula as loadTruckScreen (Purchased - Sold - AllTrucks)
+  const allItems = await dbGetAll('invoice_items');
+  const soldBags = allItems.filter(it => parseInt(it.product_id) === productId).reduce((s, it) => s + parseFloat(it.quantity || 0), 0);
+  const poRaw2 = await dbGet('settings', 'fin_purchase_orders');
+  const poList2 = poRaw2?.value ? JSON.parse(poRaw2.value) : [];
+  let purchBags = 0;
+  poList2.forEach(o => {
+    const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box || 4 }];
+    lines.forEach(l => {
+      if (parseInt(l.posProductId || l.pos_product_id) === productId) {
+        purchBags += (parseInt(l.qty) || 0) * (parseInt(l.cpb) || 4);
+      }
+    });
+  });
+  const settingsAll2 = await dbGetAll('settings');
+  let allTruckBagsForPid = 0;
+  settingsAll2.forEach(row => {
+    if (row.key && row.key.startsWith('truck_stock_')) {
+      try {
+        const obj = JSON.parse(row.value || '{}');
+        allTruckBagsForPid += parseFloat(obj[productId] || 0);
+      } catch(e) {}
+    }
+  });
+  const whQty = Math.max(0, purchBags - soldBags - allTruckBagsForPid);
 
   if (bags > whQty) { showToast(`⚠️ Only ${fmtStock(whQty, cpb)} in warehouse!`); return; }
 
