@@ -3453,7 +3453,15 @@ async function viewInvoice(id) {
     <div class="divider"></div>`;
   items.forEach((it,i)=>{
     const p = prodMap[it.product_id] || prodMap[parseInt(it.product_id)];
-    html += `<div class="summary-row"><span>${i+1}. ${p?.name||(it.name||'?')} × ${fmtStock(it.quantity||0, getCasesPerBox(p))}</span><span>${fmtMoney(it.total)}</span></div>`;
+    const ppbV = parseInt(it.pieces_per_box) || (p ? (parseInt(p.pieces_per_box)||getCasesPerBox(p)) : 4);
+    const rawQtyV = parseFloat(it.quantity||0);
+    const totalPcsV = it.uom === 'piece' ? rawQtyV : rawQtyV * ppbV;
+    const boxesV = Math.floor(totalPcsV / ppbV);
+    const remPcsV = Math.round(totalPcsV % ppbV);
+    const qtyStrV = boxesV > 0
+      ? (boxesV + ' box' + (boxesV!==1?'es':'') + (remPcsV>0?' + '+remPcsV+' pc'+(remPcsV!==1?'s':''):''))
+      : (totalPcsV + ' pc' + (totalPcsV!==1?'s':''));
+    html += `<div class="summary-row"><span>${i+1}. ${p?.name||(it.name||'?')} × ${qtyStrV}</span><span>${fmtMoney(it.total)}</span></div>`;
   });
   html += `<div class="divider"></div>
     ${inv.discount>0?('<div class="summary-row"><span>Discount</span><span class="color-red">-${fmtMoney(inv.discount)}</span></div>'):''}
@@ -6576,16 +6584,51 @@ async function loadTruckScreen() {
   const products = await dbGetAll('products');
   const truckStock = await loadTruckStock(owner);
 
-  // Read warehouse_stock directly from Supabase (correctly maintained)
-  delete localCache['warehouse_stock'];
-  let whRows2 = [];
+  // Calculate warehouse = Purchased - Sold - AllTrucks (consistent with Finance)
+  let purchByPid2 = {}, soldByPid2 = {};
   try {
-    const { data } = await sb.from('warehouse_stock').select('*');
-    if (data) whRows2 = data;
+    const poRawTL = await dbGet('settings', 'fin_purchase_orders');
+    const poListTL = poRawTL?.value ? JSON.parse(poRawTL.value) : [];
+    poListTL.forEach(o => {
+      const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
+      lines.forEach(l => {
+        const pid = parseInt(l.posProductId || l.pos_product_id);
+        if (!pid) return;
+        purchByPid2[pid] = (purchByPid2[pid]||0) + (parseInt(l.qty)||0) * (parseInt(l.cpb||l.cases_per_box)||4);
+      });
+    });
   } catch(e) {}
-  const whMap2 = {};
-  whRows2.forEach(w => whMap2[parseInt(w.product_id)] = parseFloat(w.quantity||0));
-  const calcWH = pid => Math.max(0, whMap2[parseInt(pid)] || 0);
+  try {
+    const { data: allItemsTL } = await sb.from('invoice_items').select('product_id,quantity,uom,pieces_per_box');
+    (allItemsTL || []).forEach(it => {
+      const pid = parseInt(it.product_id);
+      const ppbTL = parseInt(it.pieces_per_box) || 4;
+      const bagsTL = it.uom === 'piece' ? parseFloat(it.quantity||0) / ppbTL * 4 : parseFloat(it.quantity||0);
+      soldByPid2[pid] = (soldByPid2[pid]||0) + bagsTL;
+    });
+  } catch(e) {}
+  const allTruckBagsTL = {};
+  try {
+    const settAllTL = await dbGetAll('settings');
+    settAllTL.forEach(row => {
+      if (row.key && row.key.startsWith('truck_stock_')) {
+        try {
+          const obj = JSON.parse(row.value || '{}');
+          Object.entries(obj).forEach(([pid, pcs]) => {
+            const pidI = parseInt(pid);
+            const prodTL = products.find(p => parseInt(p.product_id) === pidI);
+            const ppbT2 = prodTL ? (parseInt(prodTL.pieces_per_box) || getCasesPerBox(prodTL)) : 4;
+            const cpbT2 = prodTL ? getCasesPerBox(prodTL) : 4;
+            allTruckBagsTL[pidI] = (allTruckBagsTL[pidI]||0) + parseFloat(pcs) / ppbT2 * cpbT2;
+          });
+        } catch(e) {}
+      }
+    });
+  } catch(e) {}
+  const calcWH = pid => {
+    const pidI = parseInt(pid);
+    return Math.max(0, (purchByPid2[pidI]||0) - (soldByPid2[pidI]||0) - (allTruckBagsTL[pidI]||0));
+  };
 
   let truckTotalBoxes = 0, whTotalBoxes = 0;
   products.forEach(p => {
