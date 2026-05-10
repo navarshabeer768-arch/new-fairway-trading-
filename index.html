@@ -2760,16 +2760,53 @@ async function loadInventory() {
   const invMap = {};
   Object.keys(truckStock).forEach(pid => { invMap[parseInt(pid)] = { quantity: truckStock[pid] }; });
 
-  // Read warehouse directly from warehouse_stock table (source of truth — updated on load/return)
-  delete localCache['warehouse_stock'];
-  let whRowsInv = [];
+  // Calculate warehouse = Purchased - Sold - AllTrucks (dynamic, same as Finance)
+  let purchByPid = {}, soldByPid = {};
   try {
-    const { data: whd } = await sb.from('warehouse_stock').select('product_id,quantity');
-    if (whd) whRowsInv = whd;
+    const poRawWH = await dbGet('settings', 'fin_purchase_orders');
+    const poListWH = poRawWH?.value ? JSON.parse(poRawWH.value) : [];
+    poListWH.forEach(o => {
+      const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
+      lines.forEach(l => {
+        const pid = parseInt(l.posProductId || l.pos_product_id);
+        if (!pid) return;
+        purchByPid[pid] = (purchByPid[pid]||0) + (parseInt(l.qty)||0) * (parseInt(l.cpb||l.cases_per_box)||4);
+      });
+    });
   } catch(e) {}
-  const whMapInv = {};
-  whRowsInv.forEach(w => whMapInv[parseInt(w.product_id)] = parseFloat(w.quantity||0));
-  const calcWH = pid => Math.max(0, whMapInv[parseInt(pid)] || 0);
+  try {
+    delete localCache['invoice_items'];
+    const { data: allItemsWH } = await sb.from('invoice_items').select('product_id,quantity,uom,pieces_per_box');
+    (allItemsWH || []).forEach(it => {
+      const pid = parseInt(it.product_id);
+      const ppbWH = parseInt(it.pieces_per_box) || 4;
+      const cpbWH = 4; // cases_per_box always 4
+      const bagsWH = it.uom === 'piece' ? parseFloat(it.quantity||0) / ppbWH * cpbWH : parseFloat(it.quantity||0);
+      soldByPid[pid] = (soldByPid[pid]||0) + bagsWH;
+    });
+  } catch(e) {}
+  const allTruckBagsByPid = {};
+  try {
+    const settAllWH = await dbGetAll('settings');
+    settAllWH.forEach(row => {
+      if (row.key && row.key.startsWith('truck_stock_')) {
+        try {
+          const obj = JSON.parse(row.value || '{}');
+          Object.entries(obj).forEach(([pid, pcs]) => {
+            const pidI = parseInt(pid);
+            const prod = products.find(p => parseInt(p.product_id) === pidI);
+            const ppbT = prod ? (parseInt(prod.pieces_per_box) || getCasesPerBox(prod)) : 4;
+            const cpbT = prod ? getCasesPerBox(prod) : 4;
+            allTruckBagsByPid[pidI] = (allTruckBagsByPid[pidI]||0) + parseFloat(pcs) / ppbT * cpbT;
+          });
+        } catch(e) {}
+      }
+    });
+  } catch(e) {}
+  const calcWH = pid => {
+    const pidI = parseInt(pid);
+    return Math.max(0, (purchByPid[pidI]||0) - (soldByPid[pidI]||0) - (allTruckBagsByPid[pidI]||0));
+  };
 
   const alerts = document.getElementById('low-stock-alerts');
   const list = document.getElementById('inventory-list');
@@ -6548,16 +6585,51 @@ async function loadTruckScreen() {
   const products = await dbGetAll('products');
   const truckStock = await loadTruckStock(owner);
 
-  // Read warehouse directly from warehouse_stock table (source of truth)
-  delete localCache['warehouse_stock'];
-  let whRowsTL = [];
+  // Calculate warehouse = Purchased - Sold - AllTrucks (dynamic, same as Finance)
+  let purchByPid2 = {}, soldByPid2 = {};
   try {
-    const { data: whdTL } = await sb.from('warehouse_stock').select('product_id,quantity');
-    if (whdTL) whRowsTL = whdTL;
+    const poRawTL = await dbGet('settings', 'fin_purchase_orders');
+    const poListTL = poRawTL?.value ? JSON.parse(poRawTL.value) : [];
+    poListTL.forEach(o => {
+      const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
+      lines.forEach(l => {
+        const pid = parseInt(l.posProductId || l.pos_product_id);
+        if (!pid) return;
+        purchByPid2[pid] = (purchByPid2[pid]||0) + (parseInt(l.qty)||0) * (parseInt(l.cpb||l.cases_per_box)||4);
+      });
+    });
   } catch(e) {}
-  const whMapTL = {};
-  whRowsTL.forEach(w => whMapTL[parseInt(w.product_id)] = parseFloat(w.quantity||0));
-  const calcWH = pid => Math.max(0, whMapTL[parseInt(pid)] || 0);
+  try {
+    const { data: allItemsTL } = await sb.from('invoice_items').select('product_id,quantity,uom,pieces_per_box');
+    (allItemsTL || []).forEach(it => {
+      const pid = parseInt(it.product_id);
+      const ppbTL = parseInt(it.pieces_per_box) || 4;
+      const bagsWH = it.uom === 'piece' ? parseFloat(it.quantity||0) / ppbTL * 4 : parseFloat(it.quantity||0);
+      soldByPid2[pid] = (soldByPid2[pid]||0) + bagsWH;
+    });
+  } catch(e) {}
+  const allTruckBagsTL = {};
+  try {
+    const settAllTL = await dbGetAll('settings');
+    settAllTL.forEach(row => {
+      if (row.key && row.key.startsWith('truck_stock_')) {
+        try {
+          const obj = JSON.parse(row.value || '{}');
+          Object.entries(obj).forEach(([pid, pcs]) => {
+            const pidI = parseInt(pid);
+            const prodTL = products.find(p => parseInt(p.product_id) === pidI);
+            const ppbT2 = prodTL ? (parseInt(prodTL.pieces_per_box)||getCasesPerBox(prodTL)) : 4;
+            const cpbT2 = prodTL ? getCasesPerBox(prodTL) : 4;
+            allTruckBagsTL[pidI] = (allTruckBagsTL[pidI]||0) + parseFloat(pcs) / ppbT2 * cpbT2;
+          });
+        } catch(e) {}
+      }
+    });
+  } catch(e) {}
+  const calcWH = pid => {
+    const pidI = parseInt(pid);
+    return Math.max(0, (purchByPid2[pidI]||0) - (soldByPid2[pidI]||0) - (allTruckBagsTL[pidI]||0));
+  };
 
   let truckTotalPieces = 0, whTotalBags = 0;
   products.forEach(p => {
@@ -6685,7 +6757,7 @@ async function confirmTruckLoad() {
   const bags = boxes * cpb;
   const owner = getCurrentTruckOwner();
 
-  // Calculate warehouse = Purchased - Sold - AllTrucks (consistent with truck screen display)
+  // Calculate warehouse = Purchased - Sold - AllTrucks for this product
   const prod2 = (await dbGetAll('products')).find(p => parseInt(p.product_id) === productId);
   const cpb2 = prod2 ? getCasesPerBox(prod2) : 4;
   const ppb2 = prod2 ? (parseInt(prod2.pieces_per_box) || cpb2) : cpb2;
