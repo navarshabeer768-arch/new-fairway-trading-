@@ -6630,15 +6630,33 @@ async function loadTruckScreen() {
     return Math.max(0, (purchByPid2[pidI]||0) - (soldByPid2[pidI]||0) - (allTruckBagsTL[pidI]||0));
   };
 
-  let truckTotalBoxes = 0, whTotalBoxes = 0;
+  let truckTotalPieces = 0, whTotalBags = 0;
   products.forEach(p => {
     const cpb = getCasesPerBox(p) || 1;
     const ppb = parseInt(p.pieces_per_box) || cpb;
-    truckTotalBoxes += Math.floor((truckStock[p.product_id] || 0) / ppb);
-    whTotalBoxes += Math.floor(calcWH(p.product_id) / cpb);
+    truckTotalPieces += (truckStock[p.product_id] || 0); // sum raw pieces
+    whTotalBags += Math.floor(calcWH(p.product_id) / cpb);
   });
-  document.getElementById('tl-truck-total').textContent = truckTotalBoxes + ' boxes';
-  document.getElementById('tl-warehouse-total').textContent = whTotalBoxes + ' boxes';
+  // For truck total: find a representative ppb (use first product's ppb, or average)
+  // Better: sum all pieces, display as total boxes using weighted average not needed
+  // Just display total pieces as boxes using common ppb per product
+  let truckBoxesTotal = 0, truckPcsRem = 0;
+  products.forEach(p => {
+    const cpb = getCasesPerBox(p) || 1;
+    const ppb = parseInt(p.pieces_per_box) || cpb;
+    const pcs = truckStock[p.product_id] || 0;
+    truckBoxesTotal += Math.floor(pcs / ppb);
+    truckPcsRem += pcs % ppb;
+  });
+  // Roll over extra pcs into boxes using average ppb (approximate for header only)
+  const avgPpb = products.length > 0 ? products.reduce((s,p) => s + (parseInt(p.pieces_per_box)||getCasesPerBox(p)||4), 0) / products.length : 48;
+  truckBoxesTotal += Math.floor(truckPcsRem / avgPpb);
+  const remPcsDisplay = Math.round(truckPcsRem % avgPpb);
+  const truckTotalStr = truckBoxesTotal > 0
+    ? (remPcsDisplay > 0 ? truckBoxesTotal + ' boxes +' + remPcsDisplay + ' pcs' : truckBoxesTotal + ' boxes')
+    : (truckPcsRem > 0 ? truckPcsRem + ' pcs' : '0 boxes');
+  document.getElementById('tl-truck-total').textContent = truckTotalStr;
+  document.getElementById('tl-warehouse-total').textContent = whTotalBags + ' boxes';
 
   const list = document.getElementById('truckload-list');
   if (!products.length) { list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📦</div><div class="empty-state-text">No products yet</div></div>'; return; }
