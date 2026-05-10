@@ -3594,7 +3594,7 @@ async function editInvoice() {
       : (totalPieces + ' pc' + (totalPieces!==1?'s':''));
     const priceDisplay = `QR ${pricePerPiece.toFixed(3)}/pc · QR ${pricePerBox.toFixed(2)}/box`;
     const itemTotal = parseFloat(it.total || (totalPieces * pricePerPiece));
-    const bags = ispiece ? rawQty : rawQty; // keep raw for data-old-qty
+    // data-old-qty stores raw quantity as saved in DB; data-price is price per piece
     return `<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--surface2);border-radius:8px;margin-bottom:6px;">
       <div style="flex:1;">
         <div style="font-size:.85rem;font-weight:600;" class="edit-product-name">${p?.name||'?'}</div>
@@ -3603,11 +3603,11 @@ async function editInvoice() {
       <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
         <span style="font-size:.65rem;color:var(--text2);">boxes</span>
         <input type="number" value="${boxes}" min="0" style="width:55px;padding:5px;border:1px solid var(--border);border-radius:6px;text-align:center;font-weight:700;background:var(--surface2);" 
-          oninput="syncBoxBagInput(this, ${cpb})" data-cpb="${cpb}" data-sibling="bags">
+          oninput="syncBoxBagInput(this, ${ppb})" data-cpb="${ppb}" data-sibling="pcs">
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
-        <span style="font-size:.65rem;color:var(--text2);">bags</span>
-        <input type="number" value="${bags}" min="0" style="width:55px;padding:5px;border:1px solid var(--border);border-radius:6px;text-align:center;font-weight:700;" data-item-id="${it.id}" data-product-id="${it.product_id}" data-old-qty="${bags}" data-price-per-box="${pricePerBox}" data-cpb="${cpb}" data-price="${pricePerBag}" class="edit-item-qty" oninput="updateEditTotal()">
+        <span style="font-size:.65rem;color:var(--text2);">pcs</span>
+        <input type="number" value="${totalPieces}" min="0" style="width:55px;padding:5px;border:1px solid var(--border);border-radius:6px;text-align:center;font-weight:700;" data-item-id="${it.id}" data-product-id="${it.product_id}" data-old-qty="${rawQty}" data-uom="${it.uom||'piece'}" data-ppb="${ppb}" data-price-per-box="${pricePerBox}" data-cpb="${cpb}" data-price="${pricePerPiece}" class="edit-item-qty" oninput="updateEditTotal()">
       </div>
       <span style="font-size:.85rem;font-weight:700;min-width:70px;text-align:right;" id="edit-item-total-${it.id||i}">${fmtMoney(itemTotal)}</span>
     </div>`;
