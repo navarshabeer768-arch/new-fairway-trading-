@@ -1914,8 +1914,13 @@ function loadBalanceSheet() {
     const pid = parseInt(it.product_id);
     const pp = prodMap[pid] || {}; const fp = finProdMap[pid] || {};
     const cpb = parseInt(pp.cases_per_box || fp.cases_per_box || 4);
+    const ppb = parseInt(pp.pieces_per_box || fp.pieces_per_box || it.pieces_per_box || cpb);
     const costPerBag = parseFloat(it.cost||0) || (parseFloat(pp.cost_price||fp.cost_price||0)/cpb);
-    totalCOGS += costPerBag * parseFloat(it.quantity||0);
+    const rawQty = parseFloat(it.quantity||0);
+    // Convert pieces to bags for COGS calculation
+    const isPieceStore = it.uom === 'piece' || (parseInt(it.pieces_per_box)||0) > 0;
+    const bagsQty = isPieceStore ? rawQty * (cpb/ppb) : rawQty;
+    totalCOGS += costPerBag * bagsQty;
   });
 
   const totalAllExp = totalSalaries + totalExp + posExp;
@@ -2463,11 +2468,17 @@ function loadProducts() {
         });
       });
 
-      // Calculate sold per product from invoice_items
+      // Calculate sold per product from invoice_items (convert pieces to bags if needed)
       const soldByPid = {};
       posData.invoice_items.forEach(it => {
         const pid = parseInt(it.product_id); if(!pid) return;
-        soldByPid[pid] = (soldByPid[pid]||0) + parseFloat(it.quantity||0);
+        const rawQty = parseFloat(it.quantity||0);
+        const ppbItem = parseInt(it.pieces_per_box)||0;
+        const isPieceStore = it.uom === 'piece' || ppbItem > 0;
+        const prod2 = posData.products.find(p => parseInt(p.product_id) === pid);
+        const cpbP = parseInt(prod2?.cases_per_box)||4;
+        const ppbP = parseInt(prod2?.pieces_per_box)||ppbItem||cpbP;
+        soldByPid[pid] = (soldByPid[pid]||0) + (isPieceStore ? rawQty*(cpbP/ppbP) : rawQty);
       });
 
       // Warehouse = Purchased - Sold - Truck (same as Stock Report)
@@ -3542,7 +3553,13 @@ function loadTrialBalance() {
   const invIdSet = new Set(invs.map(i=>String(i.invoice_id)));
   posData.invoice_items.filter(it=>invIdSet.has(String(it.invoice_id))).forEach(it=>{
     const pid=parseInt(it.product_id); if(!pid) return;
-    soldByPid[pid]=(soldByPid[pid]||0)+parseFloat(it.quantity||0);
+    const rawQty=parseFloat(it.quantity||0);
+    const ppbItem=parseInt(it.pieces_per_box)||0;
+    const isPieceStore=it.uom==='piece'||ppbItem>0;
+    const prod3=posData.products.find(p=>parseInt(p.product_id)===pid);
+    const cpbP=parseInt(prod3?.cases_per_box)||4;
+    const ppbP=parseInt(prod3?.pieces_per_box)||ppbItem||cpbP;
+    soldByPid[pid]=(soldByPid[pid]||0)+(isPieceStore?rawQty*(cpbP/ppbP):rawQty);
   });
   // Also get truck stock from settings
   const truckByPid = {};
@@ -3738,7 +3755,18 @@ function renderStockReport(asOf) {
     if (!inv || inv.date > asOf) return;
     const pid = parseInt(it.product_id);
     if (!pid) return;
-    soldByProduct[pid] = (soldByProduct[pid]||0) + parseFloat(it.quantity||0); // bags
+    const rawQty = parseFloat(it.quantity||0);
+    // invoice_items.quantity may be stored as PIECES (new) or BAGS (old)
+    // Detect: if uom='piece' or pieces_per_box saved on item → stored as pieces → convert to bags
+    const ppbItem = parseInt(it.pieces_per_box) || 0;
+    const isPieceStore = it.uom === 'piece' || ppbItem > 0;
+    // Get cpb for this product
+    const prod = posData.products.find(p => p.product_id === pid || p.product_id === it.product_id);
+    const cpbProd = parseInt(prod?.cases_per_box) || 4;
+    const ppbProd = parseInt(prod?.pieces_per_box) || ppbItem || cpbProd;
+    // Convert to bags
+    const bagsQty = isPieceStore ? rawQty * (cpbProd / ppbProd) : rawQty;
+    soldByProduct[pid] = (soldByProduct[pid]||0) + bagsQty;
   });
 
   const ppbMap = posData._ppbMap || {};
