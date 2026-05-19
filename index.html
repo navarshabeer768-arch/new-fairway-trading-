@@ -1811,21 +1811,18 @@ function fmtStock(totalUnits, cpb) {
   return `${boxes} box${boxes !== 1 ? 'es' : ''} + ${rem} pc${rem !== 1 ? 's' : ''}`;
 }
 
-function fmtTruckPieces(totalPieces, ppb) {
-  // Display truck stock stored as pieces
-  ppb = parseInt(ppb) || 4;
-  totalPieces = Math.round(totalPieces || 0);
-  if (totalPieces === 0) return '0 boxes';
+function fmtStockTruck(totalUnits, product) {
+  // Used for TRUCK & POS display - uses pieces_per_box
+  const ppb = parseInt(product?.pieces_per_box) || parseInt(product?.cases_per_box) || 4;
+  const cpb = parseInt(product?.cases_per_box) || 4;
+  if (totalUnits === 0) return '0 boxes';
+  // Convert from cases units to pieces units for display
+  const totalPieces = totalUnits * (ppb / cpb);
   const boxes = Math.floor(totalPieces / ppb);
-  const rem = totalPieces % ppb;
+  const rem = Math.round(totalPieces % ppb);
   if (boxes === 0) return `${rem} pc${rem !== 1 ? 's' : ''}`;
   if (rem === 0) return `${boxes} box${boxes !== 1 ? 'es' : ''}`;
   return `${boxes} box${boxes !== 1 ? 'es' : ''} + ${rem} pc${rem !== 1 ? 's' : ''}`;
-}
-
-function fmtStockTruck(totalPieces, product) {
-  const ppb = parseInt(product?.pieces_per_box) || parseInt(product?.cases_per_box) || 4;
-  return fmtTruckPieces(totalPieces, ppb);
 }
 // ── EMPLOYEE MANAGEMENT (Supabase-synced) ──
 let _empCache = null; // local cache to avoid repeated fetches
@@ -2170,14 +2167,12 @@ async function loadPOSScreen() {
     } catch(e) {}
   }
   const invMap = await getMyTruckQtyMap(); // settings-based truck stock
-  // Always fetch fresh from Supabase — never use stale cache
-  delete localCache['warehouse_stock'];
-  let wh = [];
-  try {
-    const { data: whDirect } = await sb.from('warehouse_stock').select('*');
-    if (whDirect) { localCache['warehouse_stock'] = whDirect; wh = whDirect; }
-  } catch(e) {
-    wh = await dbGetAll('warehouse_stock');
+  let wh = await dbGetAll('warehouse_stock');
+  if (!wh || wh.length === 0) {
+    try {
+      const { data: whDirect } = await sb.from('warehouse_stock').select('*');
+      if (whDirect) { localCache['warehouse_stock'] = whDirect; wh = whDirect; }
+    } catch(e) {}
   }
   const whMap = {};
   wh.forEach(w => whMap[w.product_id] = w.quantity);
@@ -2273,17 +2268,16 @@ function toggleFOC(idx, checked) {
 async function addToCart(productId) {
   const p = (window._posProducts || []).find(x => x.product_id === productId);
   if (!p) return;
-  const truckPieces = p.truckQty || 0; // now stored as pieces
-  if (truckPieces <= 0) { showToast('⚠️ Out of stock!'); return; }
-  const bpb = getCasesPerBox(p);
-  const ppb = parseInt(p.pieces_per_box) || bpb;
-  const bagPrice = parseFloat((p.selling_price / ppb).toFixed(3));
+  const truckBags = p.truckQty || 0;
+  if (truckBags <= 0) { showToast('⚠️ Out of stock!'); return; }
+  const bpb = getCasesPerBox(p); // cases per box for stock math
+  const ppb = parseInt(p.pieces_per_box) || bpb; // pieces per box for price display
+  const bagPrice = parseFloat((p.selling_price / ppb).toFixed(3)); // price per piece
   const existing = cart.find(c => c.product_id === productId && !c.isFOC);
   if (existing) {
     const step = existing.uom === 'bag' ? 1 : bpb;
     const newBags = existing.totalBags + step;
-    const newPieces = Math.round(newBags * (ppb/bpb));
-    if (newPieces > truckPieces) { showToast('⚠️ Not enough stock!'); return; }
+    if (newBags > truckBags) { showToast('⚠️ Not enough stock!'); return; }
     existing.totalBags = newBags;
     existing.quantity = newBags;
     const boxes = Math.floor(newBags / bpb);
@@ -2295,19 +2289,21 @@ async function addToCart(productId) {
       name: p.name,
       price: p.selling_price,
       bagPrice,
+      piecePrice,
       basePrice: p.selling_price,
       cost: p.cost_price,
       quantity: bpb,
       totalBags: bpb,
+      pieces: 0,
+      piecesPerBag: ppb,
       total: p.selling_price,
       icon: p.icon || '📦',
       unit: p.unit || 'Box',
       displayUnit: p.unit || 'Box',
       uom: 'box',
       bagsPerBox: bpb,
-      piecesPerBox: ppb,
       isFOC: false,
-      maxQty: truckPieces // in pieces
+      maxQty: truckBags
     });
   }
   renderCart();
@@ -2331,41 +2327,14 @@ function addBoxes(idx, delta) {
   const bagRem = item.totalBags % bpb; // preserve existing extra bags
   const newTotalBags = Math.max(0, Math.floor(item.totalBags / bpb) + delta) * bpb + bagRem;
   if (newTotalBags <= 0 && delta < 0) { removeFromCart(idx); return; }
-  const ppbChk = item.piecesPerBox || bpb;
-  const newPiecesChk = Math.round(newTotalBags * (ppbChk/bpb));
-  if (newPiecesChk > item.maxQty) { showToast(`⚠️ Only ${fmtTruckPieces(item.maxQty, ppbChk)} in truck!`); return; }
+  if (newTotalBags > item.maxQty) { showToast(`⚠️ Only ${fmtStock(item.maxQty, bpb)} in truck!`); return; }
   item.totalBags = newTotalBags;
   item.quantity = newTotalBags;
   item.uom = bagRem > 0 ? 'mixed' : 'box';
-  const ppbBox = item.piecesPerBox || bpb;
-  const totalPcsBox = Math.round(newTotalBags * (ppbBox/bpb));
-  const boxesDisp = Math.floor(totalPcsBox / ppbBox);
-  const remPcsBox = totalPcsBox % ppbBox;
-  const pcPriceBox = item.bagPrice || item.basePrice / ppbBox;
-  item.total = item.isFOC ? 0 : (boxesDisp * item.basePrice) + (remPcsBox * pcPriceBox);
-  renderCart();
-}
-
-function setPieceDirect(idx, val) {
-  const item = cart[idx];
-  const bpb = item.bagsPerBox || 4;
-  const ppb = item.piecesPerBox || bpb;
-  const newRemPcs = Math.max(0, parseInt(val) || 0);
-  // Keep existing boxes, replace remainder pieces
-  const currentPieces = Math.round((item.totalBags||0) * (ppb/bpb));
-  const currentBoxes = Math.floor(currentPieces / ppb);
-  const newTotalPieces = (currentBoxes * ppb) + newRemPcs;
-  if (newTotalPieces <= 0) { removeFromCart(idx); return; }
-  if (newTotalPieces > item.maxQty) {
-    showToast(`⚠️ Only ${fmtTruckPieces(item.maxQty, ppb)} in truck!`);
-    renderCart(); return;
-  }
-  item.totalBags = newTotalPieces * (bpb/ppb);
-  item.quantity = item.totalBags;
-  const boxes = Math.floor(newTotalPieces / ppb);
-  const remPcs = newTotalPieces % ppb;
-  const pcPrice = item.bagPrice || item.basePrice / ppb;
-  item.total = item.isFOC ? 0 : (boxes * item.basePrice) + (remPcs * pcPrice);
+  const boxes = Math.floor(newTotalBags / bpb);
+  const rem = newTotalBags % bpb;
+  const bagP = item.bagPrice || item.basePrice / bpb;
+  item.total = item.isFOC ? 0 : (boxes * item.basePrice) + (rem * bagP);
   renderCart();
 }
 
@@ -2375,21 +2344,16 @@ function togglePieceMode(idx) { /* removed */ }
 function addBags(idx, delta) {
   const item = cart[idx];
   const bpb = item.bagsPerBox || 4;
-  const ppb = item.piecesPerBox || bpb;
-  // delta is in PIECES — add/remove 1 piece at a time
-  const currentPieces = Math.round(item.totalBags * (ppb / bpb));
-  const newPieces = currentPieces + delta;
-  if (newPieces <= 0) { removeFromCart(idx); return; }
-  if (newPieces > item.maxQty) { showToast(`⚠️ Only ${fmtTruckPieces(item.maxQty, ppb)} in truck!`); return; }
-  // Convert back to bags for stock math
-  item.totalBags = newPieces * (bpb / ppb);
-  item.quantity = item.totalBags;
-  item.uom = newPieces % ppb === 0 ? 'box' : 'mixed';
-  // Price = pieces × price per piece
-  const pcPrice = item.bagPrice || item.basePrice / ppb;
-  const boxes = Math.floor(newPieces / ppb);
-  const remPcs = newPieces % ppb;
-  item.total = item.isFOC ? 0 : (boxes * item.basePrice) + (remPcs * pcPrice);
+  const newTotalBags = item.totalBags + delta;
+  if (newTotalBags <= 0) { removeFromCart(idx); return; }
+  if (newTotalBags > item.maxQty) { showToast(`⚠️ Only ${fmtStock(item.maxQty, bpb)} in truck!`); return; }
+  item.totalBags = newTotalBags;
+  item.quantity = newTotalBags;
+  item.uom = 'mixed';
+  const boxes = Math.floor(newTotalBags / bpb);
+  const rem = newTotalBags % bpb;
+  const bagP = item.bagPrice || item.basePrice / bpb;
+  item.total = item.isFOC ? 0 : (boxes * item.basePrice) + (rem * bagP);
   renderCart();
 }
 
@@ -2399,22 +2363,18 @@ function renderCart() {
   if (cart.length === 0) { section.style.display = 'none'; updateCartSummary(); return; }
   section.style.display = 'block';
   itemsDiv.innerHTML = cart.map((item, i) => {
-    const bpb = item.bagsPerBox || 4; // cases per box (for stock math)
-    const ppb = item.piecesPerBox || bpb; // pieces per box (for display)
-    // Truck stock IS stored in pieces now
-    const maxPieces = item.maxQty || 0; // already in pieces
-    const stockBoxes = Math.floor(maxPieces / ppb);
-    const stockRem = maxPieces % ppb;
+    const bpb = item.bagsPerBox || 4;
+    const stockBoxes = Math.floor((item.maxQty||0)/bpb);
+    const stockRem = (item.maxQty||0) % bpb;
     const stockFmt = stockBoxes > 0
-      ? stockBoxes + ' box' + (stockBoxes!==1?'es':'') + (stockRem>0?' + '+stockRem+' pc'+(stockRem!==1?'s':''):'')
-      : (maxPieces + ' pcs');
-    // totalBags in cart = cases units; convert to pieces for display
-    const totalPieces = Math.round((item.totalBags||0) * (ppb/bpb));
-    const boxes = Math.floor(totalPieces / ppb);
-    const rem = totalPieces % ppb;
+      ? stockBoxes + ' box' + (stockBoxes!==1?'es':'') + (stockRem>0?' + '+stockRem+' bag'+(stockRem!==1?'s':''):'')
+      : ((item.maxQty||0) + ' bags');
+    const boxes = Math.floor((item.totalBags||0)/bpb);
+    const rem = (item.totalBags||0) % bpb;
+    // Display: "3 boxes + 2 bags" or "3 boxes" or "2 bags"
     const qtyDisplay = boxes > 0
       ? boxes + ' box' + (boxes!==1?'es':'') + (rem>0?' + '+rem+' pc'+(rem!==1?'s':''):'')
-      : (totalPieces + ' pc' + (totalPieces!==1?'s':''));
+      : (rem + ' pc' + (rem!==1?'s':''));
     const priceDisplay = item.isFOC
       ? '<span style="color:var(--green);font-weight:700;">FREE (FOC)</span>'
       : `<span style="color:var(--navy);font-weight:700;">${fmtMoney(item.basePrice)}/box</span>`
@@ -2436,15 +2396,11 @@ function renderCart() {
           <span style="min-width:52px;text-align:center;font-weight:800;font-size:.9rem;padding:0 4px;">${boxes} box${boxes!==1?'es':''}</span>
           <button onclick="addBoxes(${i},1)" style="width:36px;height:36px;border:none;background:none;font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--navy);">+</button>
         </div>
-        <!-- Piece controls with typeable input -->
-        ${bpb>1?`<div style="display:flex;align-items:center;gap:4px;">
-          <span style="font-size:.75rem;font-weight:700;color:var(--text2);">pcs:</span>
-          <button onclick="addBags(${i},-1)" style="width:28px;height:32px;border:1px solid var(--border);background:var(--surface2);border-radius:6px 0 0 6px;font-size:1rem;font-weight:700;cursor:pointer;color:var(--text2);">−</button>
-          <input type="number" min="0" value="${rem}" 
-            onchange="setPieceDirect(${i}, this.value)"
-            onclick="this.select()"
-            style="width:48px;height:32px;border:1px solid var(--border);border-left:none;border-right:none;text-align:center;font-weight:800;font-size:.9rem;color:var(--navy);outline:none;padding:0;">
-          <button onclick="addBags(${i},1)" style="width:28px;height:32px;border:1px solid var(--border);background:var(--surface2);border-radius:0 6px 6px 0;font-size:1rem;font-weight:700;cursor:pointer;color:var(--text2);">+</button>
+        <!-- Piece (was bag) controls -->
+        ${bpb>1?`<div style="display:flex;align-items:center;gap:0;background:var(--surface2);border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+          <button onclick="addBags(${i},-1)" style="width:28px;height:36px;border:none;background:none;font-size:1rem;font-weight:700;cursor:pointer;color:var(--text2);">−</button>
+          <span style="min-width:48px;text-align:center;font-weight:700;font-size:.8rem;color:var(--text2);">${rem} pc${rem!==1?'s':''}</span>
+          <button onclick="addBags(${i},1)" style="width:28px;height:36px;border:none;background:none;font-size:1rem;font-weight:700;cursor:pointer;color:var(--text2);">+</button>
         </div>`:''}
         <!-- FOC toggle -->
         <label style="display:flex;align-items:center;gap:3px;font-size:.75rem;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:auto;">
@@ -2631,30 +2587,35 @@ async function completeOrder() {
     } catch(_e) {}
     // Save items & update inventory
     for (const item of cart) {
-      const bpb = item.bagsPerBox || getCasesPerBox(prodMap?.[item.product_id]) || 4;
-      const ppb = item.piecesPerBox || bpb;
       const bagsToDeduct = item.totalBags || item.quantity || 1;
-      const piecesToDeduct = Math.round(bagsToDeduct * (ppb / bpb));
       const itemData = {
         invoice_id: invId,
         product_id: item.product_id,
         name: item.name || '',
-        quantity: piecesToDeduct, // store as PIECES for correct invoice display
+        quantity: bagsToDeduct,
         price: item.basePrice || item.price || 0,
-        cost: item.cost ? (item.cost / bpb) : 0,
+        cost: item.cost ? (item.cost / (item.bagsPerBox || getCasesPerBox(prodMap?.[item.product_id]) || 1)) : 0,
         total: item.total || 0
       };
-      try { itemData.display_unit = 'Piece'; } catch(e){}
-      try { itemData.uom = 'piece'; } catch(e){}
+      try { itemData.display_unit = item.uom === 'piece' ? 'Piece' : (item.displayUnit || item.unit || 'Box'); } catch(e){}
+      try { itemData.uom = item.uom || 'box'; } catch(e){}
       try { itemData.is_foc = item.isFOC ? 1 : 0; } catch(e){}
-      try { itemData.pieces_per_box = ppb; } catch(e){}
+      try { if (item.uom === 'piece') { itemData.pieces = item.pieces || 1; itemData.piece_price = item.piecePrice || 0; } } catch(e){}
       await dbAdd('invoice_items', itemData);
-      // Deduct from truck in PIECES (truck stores pieces)
+      // Deduct from THIS employee's truck stock (settings-based)
       const _saleOwner = getCurrentTruckOwner();
       const _truckStock = await loadTruckStock(_saleOwner);
-      _truckStock[item.product_id] = Math.max(0, (_truckStock[item.product_id] || 0) - piecesToDeduct);
+      _truckStock[item.product_id] = Math.max(0, (_truckStock[item.product_id] || 0) - bagsToDeduct);
       await saveTruckStock(_saleOwner, _truckStock);
-      // Warehouse NOT affected by sales (only by truck load/return)
+      // Also deduct from warehouse_stock in Supabase (so Finance shows correct stock)
+      try {
+        const { data: whSale } = await sb.from('warehouse_stock').select('quantity').eq('product_id', item.product_id);
+        if (whSale && whSale.length > 0) {
+          const newWHQty = Math.max(0, parseFloat(whSale[0].quantity || 0) - bagsToDeduct);
+          await sb.from('warehouse_stock').update({ quantity: newWHQty, last_updated: new Date().toISOString() }).eq('product_id', item.product_id);
+          delete localCache['warehouse_stock'];
+        }
+      } catch(e) { console.warn('WH sale deduct failed:', e.message); }
     }
     // Update customer credit
     if (custId && (payType === 'credit' || payType === 'partial')) {
@@ -2689,23 +2650,17 @@ async function completeOrder() {
       cheque_number: chequeNum,
       cheque_date: chequeDate
     };
-    const itemsForPrint = cart.map(item => {
-      const bpb2 = item.bagsPerBox || 4;
-      const ppb2 = item.piecesPerBox || bpb2;
-      const pcs = Math.round((item.totalBags||1) * (ppb2/bpb2));
-      return {
-        product_id: item.product_id,
-        name: item.name || '',
-        quantity: pcs, // in pieces
-        price: item.basePrice || item.price || 0,
-        total: item.total || 0,
-        display_unit: 'Piece',
-        uom: 'piece',
-        bags_per_box: bpb2,
-        pieces_per_box: ppb2,
-        is_foc: item.isFOC ? 1 : 0
-      };
-    });
+    const itemsForPrint = cart.map(item => ({
+      product_id: item.product_id,
+      name: item.name || '',
+      quantity: item.totalBags || item.quantity || 1,
+      price: item.basePrice || item.price || 0,
+      total: item.total || 0,
+      display_unit: item.displayUnit || item.unit || 'Box',
+      uom: item.uom || 'box',
+      bags_per_box: item.bagsPerBox || 4,
+      is_foc: item.isFOC ? 1 : 0
+    }));
     const customer = custId ? await dbGet('customers', custId) : null;
     const products = await dbGetAll('products');
     const prodMap = {};
@@ -2731,7 +2686,7 @@ async function completeOrder() {
       try {
         const prods = await dbGetAll('products');
         const invMap = await getMyTruckQtyMap(); // settings-based truck stock
-        let wh = []; try { delete localCache['warehouse_stock']; const {data:_whd} = await sb.from('warehouse_stock').select('*'); if(_whd){localCache['warehouse_stock']=_whd;wh=_whd;} } catch(e){ wh=await dbGetAll('warehouse_stock'); }
+        const wh = await dbGetAll('warehouse_stock');
         const whMap = {}; wh.forEach(w => whMap[w.product_id] = w.quantity);
         window._posProducts = prods.map(p => ({...p, truckQty: invMap[p.product_id]||0, warehouseQty: whMap[p.product_id]||0}));
       } catch(e) {}
@@ -2754,16 +2709,29 @@ async function loadInventory() {
   const invMap = {};
   Object.keys(truckStock).forEach(pid => { invMap[parseInt(pid)] = { quantity: truckStock[pid] }; });
 
-  // Read warehouse_stock directly from Supabase (already correctly calculated)
-  delete localCache['warehouse_stock'];
-  let whRows = [];
-  try {
-    const { data } = await sb.from('warehouse_stock').select('*');
-    if (data) whRows = data;
-  } catch(e) {}
-  const whMap = {};
-  whRows.forEach(w => whMap[parseInt(w.product_id)] = parseFloat(w.quantity||0));
-  const calcWH = pid => whMap[parseInt(pid)] || 0;
+  // ── Calculate warehouse: Purchased - Sold - AllTrucks (same formula as Finance) ──
+  const allItems = await dbGetAll('invoice_items');
+  const soldByPid = {};
+  allItems.forEach(it => { const pid=parseInt(it.product_id); if(pid) soldByPid[pid]=(soldByPid[pid]||0)+parseFloat(it.quantity||0); });
+
+  const poRow = await dbGet('settings','fin_purchase_orders');
+  const poList = poRow?.value ? JSON.parse(poRow.value) : [];
+  const purchByPid = {};
+  poList.forEach(o => {
+    const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
+    lines.forEach(l => {
+      const pid=parseInt(l.posProductId||l.pos_product_id); if(!pid) return;
+      purchByPid[pid]=(purchByPid[pid]||0)+(parseInt(l.qty)||0)*parseInt(l.cpb||4);
+    });
+  });
+  const allTruckBags = {};
+  const settingsAll = await dbGetAll('settings');
+  settingsAll.forEach(row => {
+    if (row.key?.startsWith('truck_stock_')) {
+      try { const obj=JSON.parse(row.value||'{}'); Object.entries(obj).forEach(([pid,qty])=>{ allTruckBags[parseInt(pid)]=(allTruckBags[parseInt(pid)]||0)+parseFloat(qty||0); }); } catch(e){}
+    }
+  });
+  const calcWH = pid => Math.max(0, (purchByPid[pid]||0)-(soldByPid[pid]||0)-(allTruckBags[pid]||0));
 
   const alerts = document.getElementById('low-stock-alerts');
   const list = document.getElementById('inventory-list');
@@ -2781,8 +2749,8 @@ async function loadInventory() {
       const cpb=getCasesPerBox(p);
       const truckCases=invMap[p.product_id]?.quantity||0;
       const whCases=calcWH(p.product_id);
-      const truckFmt=fmtStockTruck(truckCases,p);
-      const whFmt=fmtStock(whCases,cpb);
+      const truckFmt=fmtStockTruck(truckCases,p); // truck uses pieces_per_box
+      const whFmt=fmtStock(whCases,cpb); // warehouse uses cases_per_box
       const cls=truckCases<=0?'out':truckCases<=(p.low_stock_threshold||10)?'low':'';
       const imgHtml=p.photo?`<img class="inv-photo" src="${p.photo}" alt="${p.name}">`:`<div class="inv-photo-placeholder">${p.icon||'📦'}</div>`;
       return `<div class="inv-card">
@@ -2894,7 +2862,7 @@ async function loadStockCountSheet() {
     scOwner = localStorage.getItem('employee_name') || 'Admin';
   }
   const truckStock = await loadTruckStock(scOwner);
-  let wh = []; try { delete localCache['warehouse_stock']; const {data:_whd} = await sb.from('warehouse_stock').select('*'); if(_whd){localCache['warehouse_stock']=_whd;wh=_whd;} } catch(e){ wh=await dbGetAll('warehouse_stock'); }
+  const wh = await dbGetAll('warehouse_stock');
   const invMap = truckStock; // already {product_id: qty}
   const whMap = {}; wh.forEach(w => whMap[w.product_id] = w.quantity);
   const list = document.getElementById('stock-count-list');
@@ -2949,7 +2917,15 @@ async function loadCustomers() {
     list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">👥</div><div class="empty-state-text">No customers yet</div><div class="empty-state-sub">Tap + to add</div></div>';
     return;
   }
-  custs.sort((a,b) => a.name.localeCompare(b.name));
+  // Sort: credit customers first (by balance desc), then clear customers alphabetically
+  custs.sort((a,b) => {
+    const aCredit = parseFloat(a.credit_balance||0);
+    const bCredit = parseFloat(b.credit_balance||0);
+    if (aCredit > 0 && bCredit === 0) return -1;
+    if (aCredit === 0 && bCredit > 0) return 1;
+    if (aCredit > 0 && bCredit > 0) return bCredit - aCredit; // highest credit first
+    return a.name.localeCompare(b.name); // alphabetical for clear customers
+  });
   list.innerHTML = custs.map(c => {
     const mapUrl = getCustMapUrl(c.customer_id);
     return `
@@ -4511,6 +4487,45 @@ async function renderPLReport() {
   let posExpRows = Object.entries(expByCat).map(([c,a])=>`<div class="summary-row"><span style="padding-left:8px;">· ${c}</span><span class="color-red">${fmtMoney(a)}</span></div>`).join('');
   let finExpRows = Object.entries(finExpByCat).map(([c,a])=>`<div class="summary-row"><span style="padding-left:8px;">· ${c} <span style="font-size:.65rem;color:var(--text2);">(Finance)</span></span><span class="color-red">${fmtMoney(a)}</span></div>`).join('');
 
+  // Stock sold per product — broken down by cash and credit
+  const cashInvIds = new Set(filtered.filter(i=>(i.payment_type||'cash').toLowerCase()==='cash').map(i=>i.invoice_id));
+  const creditInvIds = new Set(filtered.filter(i=>(i.payment_type||'cash').toLowerCase()==='credit').map(i=>i.invoice_id));
+  const partialInvIds = new Set(filtered.filter(i=>(i.payment_type||'cash').toLowerCase()==='partial').map(i=>i.invoice_id));
+  const chequeInvIds = new Set(filtered.filter(i=>(i.payment_type||'cash').toLowerCase()==='cheque').map(i=>i.invoice_id));
+  const allCashIds = new Set([...cashInvIds, ...chequeInvIds, ...partialInvIds]);
+
+  const stockByCash = {};   // product_id → pieces
+  const stockByCredit = {}; // product_id → pieces
+  allItems.filter(it => filtered.some(i=>i.invoice_id===it.invoice_id)).forEach(it => {
+    const pid = parseInt(it.product_id); if(!pid) return;
+    const qty = parseFloat(it.quantity||0);
+    if (allCashIds.has(it.invoice_id) || allCashIds.has(parseInt(it.invoice_id))) {
+      stockByCash[pid] = (stockByCash[pid]||0) + qty;
+    } else if (creditInvIds.has(it.invoice_id) || creditInvIds.has(parseInt(it.invoice_id))) {
+      stockByCredit[pid] = (stockByCredit[pid]||0) + qty;
+    }
+  });
+
+  const allPids = [...new Set([...Object.keys(stockByCash), ...Object.keys(stockByCredit)].map(Number))];
+  const stockRows = allPids.map(pid => {
+    const p = prodMap[pid]||{};
+    const ppb = parseInt(p.pieces_per_box)||parseInt(p.cases_per_box)||4;
+    const cashPcs = stockByCash[pid]||0;
+    const creditPcs = stockByCredit[pid]||0;
+    const totalPcs = cashPcs + creditPcs;
+    const fmtPcs = pcs => {
+      const boxes = Math.floor(pcs/ppb);
+      const rem = Math.round(pcs%ppb);
+      return boxes>0&&rem>0?`${boxes}b+${rem}pc`:boxes>0?`${boxes} box${boxes!==1?'es':''}`:pcs>0?`${Math.round(pcs)} pcs`:'—';
+    };
+    return `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:4px;padding:6px 0;border-bottom:1px solid var(--border);font-size:.8rem;align-items:center;">
+      <span style="font-weight:600;">${p.name||pid}</span>
+      <span style="color:var(--green);text-align:center;">${fmtPcs(cashPcs)}</span>
+      <span style="color:var(--red);text-align:center;">${fmtPcs(creditPcs)}</span>
+      <span style="font-weight:700;text-align:center;">${fmtPcs(totalPcs)}</span>
+    </div>`;
+  }).join('');
+
   document.getElementById('report-content').innerHTML = `
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-val">${fmtMoney(totalRevenue)}</div><div class="stat-lbl">Revenue</div></div>
@@ -4534,6 +4549,16 @@ async function renderPLReport() {
       <div class="summary-row total"><span>🏆 NET PROFIT</span><span class="${netProfit>=0?'color-green':'color-red'}">${fmtMoney(netProfit)}</span></div>
       <div class="summary-row"><span>Net Margin</span><span>${margin}%</span></div>
       <div class="summary-row"><span>Invoices</span><span>${filtered.length}</span></div>
+    </div>
+    <div class="card" style="margin-top:10px;">
+      <div class="card-title">📦 Stock Sold by Product</div>
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:4px;padding:6px 0;border-bottom:2px solid var(--navy);font-size:.72rem;font-weight:700;color:var(--text2);">
+        <span>PRODUCT</span>
+        <span style="text-align:center;color:var(--green);">💵 CASH</span>
+        <span style="text-align:center;color:var(--red);">📋 CREDIT</span>
+        <span style="text-align:center;">TOTAL</span>
+      </div>
+      ${stockRows || '<div style="color:var(--text2);padding:12px 0;font-size:.85rem;">No sales in this period</div>'}
     </div>`;
 }
 
@@ -4663,7 +4688,7 @@ async function loadStockCount(mode) {
   // Load truck stock from settings (per-employee)
   const truckStock = await loadTruckStock(scOwner);
   const truckMap = {}; Object.entries(truckStock).forEach(([pid,qty]) => truckMap[parseInt(pid)] = qty||0);
-  let wh = []; try { delete localCache['warehouse_stock']; const {data:_whd} = await sb.from('warehouse_stock').select('*'); if(_whd){localCache['warehouse_stock']=_whd;wh=_whd;} } catch(e){ wh=await dbGetAll('warehouse_stock'); }
+  const wh = await dbGetAll('warehouse_stock');
   const whMap = {}; wh.forEach(i=>whMap[i.product_id]=i.quantity||0);
   const list = document.getElementById('stockcount-list');
   if (!list) return;
@@ -4983,7 +5008,7 @@ async function printStockCount() {
   const s = settings;
   const prods = await dbGetAll('products');
   const truck = await dbGetAll('inventory');
-  let wh = []; try { delete localCache['warehouse_stock']; const {data:_whd} = await sb.from('warehouse_stock').select('*'); if(_whd){localCache['warehouse_stock']=_whd;wh=_whd;} } catch(e){ wh=await dbGetAll('warehouse_stock'); }
+  const wh = await dbGetAll('warehouse_stock');
   const truckMap = {}; truck.forEach(i=>truckMap[i.product_id]=i.quantity||0);
   const whMap = {}; wh.forEach(i=>whMap[i.product_id]=i.quantity||0);
   const mode = currentStockCountMode;
@@ -5310,19 +5335,14 @@ function printA4Invoice(invoice, items, customer, prodMap) {
     const pid = parseInt(it.product_id) || it.product_id;
     const p = prodMap[pid] || prodMap[it.product_id] || prodMap[String(it.product_id)];
     const bpb = (p && getCasesPerBox(p)) || it.bags_per_box || 4;
-    const ppb = parseInt(it.pieces_per_box) || (p && p.pieces_per_box) || bpb;
     const productName = (p && p.name) || it.name || '—';
     const barcode = (p && p.barcode) || '';
-    // quantity stored as pieces (new) or bags (old)
-    const rawQty = parseFloat(it.quantity || 0);
-    const isPieceStore = it.uom === 'piece' || (it.pieces_per_box > 0);
-    const totalPieces = isPieceStore ? Math.round(rawQty) : Math.round(rawQty * (ppb / bpb));
-    const boxes = Math.floor(totalPieces / ppb);
-    const remPcs = totalPieces % ppb;
-    const unit = boxes > 0 && remPcs > 0 ? 'Box + Pc' : boxes > 0 ? 'Box' : 'Piece';
-    const qtyVal = boxes > 0 && remPcs > 0 ? boxes + ' + ' + remPcs : boxes > 0 ? String(boxes) : String(totalPieces);
-    const pcPrice = parseFloat(it.price || 0) / ppb;
-    const unitPrice = boxes === 0 ? pcPrice.toFixed(3) : parseFloat(it.price || 0).toFixed(2);
+    const totalBags = it.quantity || 0;
+    const boxes = Math.floor(totalBags / bpb);
+    const remBags = totalBags % bpb;
+    const unit = boxes > 0 && remBags > 0 ? 'Box + Pc' : boxes > 0 ? 'Box' : 'Piece';
+    const qtyVal = remBags > 0 ? (boxes > 0 ? boxes + ' + ' + remBags : remBags + '') : (boxes + '');
+    const unitPrice = boxes === 0 ? (parseFloat(it.price||0) / bpb).toFixed(3) : parseFloat(it.price||0).toFixed(2);
     const qty = it.is_foc ? '' : qtyVal;
     const price = it.is_foc ? '' : unitPrice;
     const amount = it.is_foc ? '' : parseFloat(it.total||0).toFixed(2);
@@ -5492,13 +5512,7 @@ function printThermalReceipt(invoice, items, customer, prodMap) {
     const pid = parseInt(it.product_id) || it.product_id;
     const p = prodMap[pid] || prodMap[it.product_id] || prodMap[String(it.product_id)];
     const bpb = (p && getCasesPerBox(p)) || it.bags_per_box || 4;
-    const ppb = parseInt(it.pieces_per_box) || (p && p.pieces_per_box) || bpb;
-    const rawQty = parseFloat(it.quantity || 0);
-    const isPieceStore = it.uom === 'piece' || (it.pieces_per_box > 0);
-    const totalPieces = isPieceStore ? Math.round(rawQty) : Math.round(rawQty * (ppb / bpb));
-    const boxes = Math.floor(totalPieces / ppb);
-    const remPcs = totalPieces % ppb;
-    const qtyFmt = boxes > 0 && remPcs > 0 ? `${boxes} box + ${remPcs} pcs` : boxes > 0 ? `${boxes} box${boxes!==1?'es':''}` : `${totalPieces} pcs`;
+    const qtyFmt = fmtStock(it.quantity || 0, bpb);
     const priceStr = it.is_foc ? 'FOC' : `QR ${parseFloat(it.total||0).toFixed(2)}`;
     const productName = (p && p.name) || it.name || '—';
     return `<div class="thermal-row" style="margin:7px 0;font-size:11px;padding:3px 0;border-bottom:1px dotted #ccc;"><span>${productName} × ${qtyFmt}</span><span style="font-weight:700;">${priceStr}</span></div>`;
@@ -5887,26 +5901,20 @@ function _buildA4PDF(invoice, items, customer, prodMap) {
   const tableBody = items.map((it, i) => {
     const pid = parseInt(it.product_id)||it.product_id;
     const p = prodMap[pid]||prodMap[String(it.product_id)]||{};
-    const bpb = (p&&p.cases_per_box)||4;
-    const ppb = parseInt(it.pieces_per_box)||(p&&p.pieces_per_box)||bpb;
+    const bpb = (p&&p.cases_per_box)||it.bags_per_box||4;
     const nm = (p&&p.name)||it.name||'';
     const bc = (p&&p.barcode)||'';
-    const rawQty = parseFloat(it.quantity||0);
-    // Detect if quantity is stored as pieces or bags
-    // If uom='piece' or pieces_per_box saved → already in pieces
-    // Otherwise (old invoices) → in bags, convert to pieces
-    const isPieceStore = (it.uom === 'piece') || (it.pieces_per_box > 0);
-    const totalPieces = isPieceStore
-      ? Math.round(rawQty)
-      : Math.round(rawQty * (ppb / bpb));
-    const boxes = Math.floor(totalPieces / ppb);
-    const remPcs = totalPieces % ppb;
+    const totalQty = parseFloat(it.quantity||0);
+    const boxes = Math.floor(totalQty / bpb);
+    const remPcs = Math.round(totalQty % bpb);
+    // Unit: Box when full boxes, Piece when remainder or only pieces
     const unit = boxes > 0 && remPcs > 0 ? 'Box+Pc' : boxes > 0 ? 'Box' : 'Piece';
     const qtyVal = boxes > 0 && remPcs > 0
       ? boxes + '+' + remPcs
-      : boxes > 0 ? String(boxes) : String(totalPieces);
+      : boxes > 0 ? String(boxes) : String(remPcs || Math.round(totalQty));
     const boxPrice = parseFloat(it.price||0);
-    const pcPrice = ppb > 0 ? boxPrice / ppb : boxPrice;
+    const pcPrice = bpb > 0 ? boxPrice / bpb : boxPrice;
+    // Show piece price when selling pieces only, box price when selling boxes
     const displayPrice = boxes === 0 ? pcPrice.toFixed(3) : boxPrice.toFixed(2);
     const amt   = it.is_foc?'':parseFloat(it.total||0).toFixed(2);
     const foc   = it.is_foc?qtyVal:'';
@@ -6132,7 +6140,7 @@ function closeInvoiceViewer() {
         try {
           const prods = await dbGetAll('products');
           const inv = await dbGetAll('inventory');
-          let wh = []; try { delete localCache['warehouse_stock']; const {data:_whd} = await sb.from('warehouse_stock').select('*'); if(_whd){localCache['warehouse_stock']=_whd;wh=_whd;} } catch(e){ wh=await dbGetAll('warehouse_stock'); }
+          const wh = await dbGetAll('warehouse_stock');
           const invMap = {}; inv.forEach(i => invMap[i.product_id] = i.quantity);
           const whMap = {}; wh.forEach(w => whMap[w.product_id] = w.quantity);
           window._posProducts = prods.map(p => ({...p, truckQty: invMap[p.product_id]||0, warehouseQty: whMap[p.product_id]||0}));
@@ -6510,18 +6518,48 @@ async function loadTruckScreen() {
   }
 
   const products = await dbGetAll('products');
-  const truckStock = await loadTruckStock(owner);
+  const truckStock = await loadTruckStock(owner); // {product_id: qty}
 
-  // Read warehouse_stock directly from Supabase (correctly maintained)
-  delete localCache['warehouse_stock'];
-  let whRows2 = [];
-  try {
-    const { data } = await sb.from('warehouse_stock').select('*');
-    if (data) whRows2 = data;
-  } catch(e) {}
-  const whMap2 = {};
-  whRows2.forEach(w => whMap2[parseInt(w.product_id)] = parseFloat(w.quantity||0));
-  const calcWH = pid => Math.max(0, whMap2[parseInt(pid)] || 0);
+  // ── Calculate warehouse using same formula as Finance Stock Report ──
+  // Warehouse = Purchased (bags) - Sold (bags) - Truck (bags)
+  const allInvoices = await dbGetAll('invoices');
+  const allItems = await dbGetAll('invoice_items');
+  const allPOs = await dbGetAll('advance_orders'); // not purchase orders
+  // sold per product
+  const soldByPid = {};
+  allItems.forEach(it => {
+    const pid = parseInt(it.product_id); if(!pid) return;
+    soldByPid[pid] = (soldByPid[pid]||0) + parseFloat(it.quantity||0);
+  });
+  // purchased per product — from warehouse_stock initial load + purchases
+  // Simpler: read warehouse_stock from Supabase as OPENING, then add purchases, subtract sold & truck
+  // Best approach: Warehouse = purchased total - sold total - truck
+  // Get purchased from settings fin_purchase_orders
+  const poRaw = await dbGet('settings','fin_purchase_orders');
+  const poList = poRaw?.value ? JSON.parse(poRaw.value) : [];
+  const purchByPid = {};
+  poList.forEach(o => {
+    const lines = o.lines || [{ posProductId: o.pos_product_id, qty: o.qty, cpb: o.cases_per_box||4 }];
+    lines.forEach(l => {
+      const pid = parseInt(l.posProductId||l.pos_product_id); if(!pid) return;
+      const cpb = parseInt(l.cpb||4);
+      purchByPid[pid] = (purchByPid[pid]||0) + (parseInt(l.qty)||0) * cpb;
+    });
+  });
+  // All truck stocks combined (for warehouse calc we need all trucks)
+  const allTruckBags = {};
+  const settingsAll = await dbGetAll('settings');
+  settingsAll.forEach(row => {
+    if (row.key && row.key.startsWith('truck_stock_')) {
+      try {
+        const obj = JSON.parse(row.value||'{}');
+        Object.entries(obj).forEach(([pid,qty]) => {
+          allTruckBags[parseInt(pid)] = (allTruckBags[parseInt(pid)]||0) + parseFloat(qty||0);
+        });
+      } catch(e) {}
+    }
+  });
+  const calcWH = pid => Math.max(0, (purchByPid[pid]||0) - (soldByPid[pid]||0) - (allTruckBags[pid]||0));
 
   let truckTotalBoxes = 0, whTotalBoxes = 0;
   products.forEach(p => {
@@ -6539,8 +6577,8 @@ async function loadTruckScreen() {
     const cpb = getCasesPerBox(p);
     const truckQty = truckStock[p.product_id] || 0;
     const whQty = calcWH(p.product_id);
-    const truckFmt = fmtStockTruck(truckQty, p);
-    const whFmt = fmtStock(whQty, cpb);
+    const truckFmt = fmtStockTruck(truckQty, p); // truck: uses pieces_per_box
+    const whFmt = fmtStock(whQty, cpb); // warehouse: uses cases_per_box
     const imgHtml = p.photo ? `<img class="inv-photo" src="${p.photo}" alt="${p.name}">` : `<div class="inv-photo-placeholder">${p.icon||'📦'}</div>`;
     const truckColor = truckQty <= 0 ? 'color-red' : truckQty <= (p.low_stock_threshold||10) ? 'color-gold' : 'color-navy';
 
@@ -6672,19 +6710,15 @@ async function confirmTruckLoad() {
   }
   delete localCache['warehouse_stock'];
 
-  // Add to truck stock IN PIECES (ppb units)
-  const allProds2 = await dbGetAll('products');
-  const prod2 = allProds2.find(p => p.product_id === productId);
-  const ppb2 = parseInt(prod2?.pieces_per_box) || cpb;
-  const piecesToAdd = boxes * ppb2; // boxes × pieces_per_box
+  // Add to truck stock
   const truckStock = await loadTruckStock(owner);
-  truckStock[productId] = (truckStock[productId] || 0) + piecesToAdd;
+  truckStock[productId] = (truckStock[productId] || 0) + bags;
   await saveTruckStock(owner, truckStock);
 
   await saveTruckLoadLog(productId, '', bags, cpb, owner, 'load');
   closeModal('truckload-modal');
   loadTruckScreen();
-  showToast(`✅ ${boxes} boxes (${piecesToAdd} pcs) loaded to ${owner} truck!`);
+  showToast(`✅ ${fmtStock(bags,cpb)} loaded to ${owner} truck! Warehouse: ${fmtStock(newWhQty,cpb)} remaining`);
 }
 
 function openTruckReturnModal(productId, name, truckQty, cpb) {
@@ -6700,24 +6734,19 @@ async function confirmReturn() {
   const productId = parseInt(document.getElementById('ret-product-id').value);
   const boxes = parseInt(document.getElementById('ret-qty').value) || 0;
   if (boxes <= 0) { showToast('⚠️ Enter valid quantity!'); return; }
-  const cpb = parseInt(document.getElementById('ret-product-id').dataset.cpb) || 4;
-  const bags = boxes * cpb;  // for warehouse
+  const cpb = parseInt(document.getElementById('ret-product-id').dataset.cpb) || 1;
+  const bags = boxes * cpb;  // convert boxes → bags
   const owner = getCurrentTruckOwner();
 
-  // Get pieces_per_box for truck calculation
-  const allProds3 = await dbGetAll('products');
-  const prod3 = allProds3.find(p => p.product_id === productId);
-  const ppb3 = parseInt(prod3?.pieces_per_box) || cpb;
-  const piecesToReturn = boxes * ppb3; // pieces to remove from truck
-
+  // Check this owner's truck stock
   const truckStock = await loadTruckStock(owner);
   const currentTruck = truckStock[productId] || 0;
-  if (piecesToReturn > currentTruck) {
-    showToast(`⚠️ Only ${fmtTruckPieces(currentTruck, ppb3)} in truck!`); return;
+  if (bags > currentTruck) {
+    showToast(`⚠️ Only ${fmtStock(currentTruck, cpb)} in truck!`); return;
   }
 
-  // Deduct from truck (in pieces)
-  truckStock[productId] = currentTruck - piecesToReturn;
+  // Deduct from truck
+  truckStock[productId] = currentTruck - bags;
   await saveTruckStock(owner, truckStock);
 
   // Add back to warehouse — direct update
@@ -7763,12 +7792,7 @@ async function approveRequest(reqId) {
       );
     }
     delete localCache['warehouse_stock'];
-    // Add to truck in PIECES
-    const allProdsAR = await dbGetAll('products');
-    const prodAR = allProdsAR.find(p => p.product_id === parseInt(line.product_id));
-    const ppbAR = parseInt(prodAR?.pieces_per_box) || line.cpb || 4;
-    const piecesAR = (line.boxes || Math.floor(line.bags / line.cpb)) * ppbAR;
-    truckStock[line.product_id] = (truckStock[line.product_id]||0) + piecesAR;
+    truckStock[line.product_id] = (truckStock[line.product_id]||0) + line.bags;
     await saveTruckLoadLog(line.product_id, line.product_name, line.bags, line.cpb, req.employee, 'load');
   }
   await saveTruckStock(req.employee, truckStock);
@@ -7909,19 +7933,7 @@ async function loadHandoverEmployee(forDate) {
   const totalCredit  = myInvoices.filter(i=>getP(i)==='credit').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
   const totalCheque  = myInvoices.filter(i=>getP(i)==='cheque').reduce((a,i)=>a+parseFloat(i.total_amount||0),0);
   const totalPartial = myInvoices.filter(i=>getP(i)==='partial').reduce((a,i)=>a+parseFloat(i.cash_paid||0),0);
-
-  // Get credit collections made on this date by this employee
-  let creditCollected = 0;
-  try {
-    const { data: payments } = await sb.from('credit_payments')
-      .select('*').eq('date', t);
-    const myPayments = (payments||[]).filter(p =>
-      !p.employee || p.employee === empName
-    );
-    creditCollected = myPayments.reduce((a,p) => a + parseFloat(p.amount||0), 0);
-  } catch(e) {}
-
-  const expectedCash = totalCash + totalCheque + totalPartial + creditCollected;
+  const expectedCash = totalCash + totalCheque + totalPartial;
 
   const isToday = t === today();
   const dateLabel = isToday ? 'Today' : fmtDate(t);
@@ -7935,11 +7947,9 @@ async function loadHandoverEmployee(forDate) {
       <div class="stat-card"><div class="stat-val" style="color:#1565c0;">${fmtMoney(totalCheque)}</div><div class="stat-lbl">🏦 Cheque</div></div>
       <div class="stat-card"><div class="stat-val color-gold">${fmtMoney(totalPartial)}</div><div class="stat-lbl">🔄 Partial Cash</div></div>
       <div class="stat-card"><div class="stat-val color-red">${fmtMoney(totalCredit)}</div><div class="stat-lbl">📋 Credit</div></div>
-      ${creditCollected>0?`<div class="stat-card" style="grid-column:span 2;border-color:var(--green);"><div class="stat-val color-green">${fmtMoney(creditCollected)}</div><div class="stat-lbl">💰 Credit Collected</div></div>`:''}
     </div>
     <div style="margin-top:8px;padding:10px;background:var(--surface2);border-radius:8px;text-align:center;">
       <div style="font-size:.78rem;color:var(--text2);">Expected Cash to Hand Over (${dateLabel})</div>
-      ${creditCollected>0?`<div style="font-size:.72rem;color:var(--text2);margin-bottom:4px;">Sales: ${fmtMoney(totalCash+totalCheque+totalPartial)} + Collections: ${fmtMoney(creditCollected)}</div>`:''}
       <div style="font-size:1.4rem;font-weight:900;color:var(--navy);">${fmtMoney(expectedCash)}</div>
     </div>`;
 
